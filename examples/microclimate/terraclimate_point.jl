@@ -92,6 +92,8 @@ result = simulate_microclimate(
     depths   = [0, 2.5, 5, 10, 15, 20, 30, 50, 100, 200]u"cm",
     heights  = [0.01, 2.0]u"m",
     runmoist = false,
+    clearsky = false,
+    organic_soil_cap = true,
 )
 
 # Quick inspection of outputs
@@ -170,11 +172,16 @@ let
                      for d in [0, 2.5, 5, 10, 15, 20, 30, 50, 100, 200]u"cm"]
 
     # ---- Soil temperatures --------------------------------------------------
-    p_st = plot(layout=(2, 5), size=(1400, 600),
+    soil0_julia = ustrip.(u"°C", u"K".(result.soil_temperature[t, 1]))
+    soil0_nmr   = soiltemps_nmr[:, 1]
+    soil_ylim   = (floor(min(minimum(soil0_julia), minimum(soil0_nmr))) - 1,
+                   ceil( max(maximum(soil0_julia), maximum(soil0_nmr))) + 1)
+
+    p_st = plot(layout=(3, 3), size=(900, 800),
                 title=reshape(depths_labels, 1, :), legend=:outertop)
-    for col in 1:10
+    for col in 1:9
         plot!(p_st, t, ustrip.(u"°C", u"K".(result.soil_temperature[t, col]));
-              sp=col, label="Julia",     color=:red,   ylabel="°C")
+              sp=col, label="Julia",     color=:red,   ylabel="°C", ylims=soil_ylim)
         plot!(p_st, t, soiltemps_nmr[:, col];
               sp=col, label="NicheMapR", color=:black)
     end

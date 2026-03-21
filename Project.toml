@@ -22,7 +22,7 @@ UnitfulMoles = "999f2bd7-36bf-5ba7-9bc1-c9473aa75374"
 
 [sources]
 FluidProperties = {rev = "main", url = "https://github.com/BiophysicalEcology/FluidProperties.jl"}
-Microclimate = {rev = "main", url = "https://github.com/BiophysicalEcology/Microclimate.jl"}
+Microclimate = {rev = "harmonise-depth-vectors", url = "https://github.com/BiophysicalEcology/Microclimate.jl"}
 SolarRadiation = {rev = "main", url = "https://github.com/BiophysicalEcology/SolarRadiation.jl"}
 
 [compat]
@@ -33,6 +33,7 @@ DataFrames = "1"
 Dates = "1.11.0"
 Flatten = "0.4.3"
 Geomorphometry = "0.7"
+Microclimate = "0.1.0"
 ModelParameters = "0.4"
 NCDatasets = "0.14"
 RasterDataSources = "0.7.2"

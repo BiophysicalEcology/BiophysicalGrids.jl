@@ -168,8 +168,8 @@ function get_weather(
         reference_wind_max        = ws_max,
         reference_humidity_min    = clamp.(rh_min, 0.0, 1.0),
         reference_humidity_max    = clamp.(rh_max, 0.0, 1.0),
-        cloud_min                 = Float64.(cloud_vals),
-        cloud_max                 = Float64.(cloud_vals),
+        cloud_min                 = clamp.(Float64.(cloud_vals) .* 0.5, 0.0, 1.0),
+        cloud_max                 = clamp.(Float64.(cloud_vals) .* 2.0, 0.0, 1.0),
         minima_times = (temp = 0, wind = 0, humidity = 1, cloud = 1),
         maxima_times = (temp = 1, wind = 1, humidity = 0, cloud = 0),
     )

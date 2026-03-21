@@ -53,6 +53,10 @@ appropriate parameters for the simulation site.
 - `depths`: soil node depths (default: Microclimate.jl's 19-node `DEFAULT_DEPTHS`).
 - `heights`: air profile node heights (default: `[0.01, 2.0]u"m"`).
 - `runmoist`: enable soil moisture simulation (default: `false`).
+- `clearsky`: override cloud cover to zero for all timesteps (default: `false`).
+- `organic_soil_cap`: apply an organic litter cap to the top two soil nodes, setting
+  `mineral_conductivity = 0.2 W/m/K` and `mineral_heat_capacity = 1920 J/kg/K` for
+  those nodes (equivalent to `cap = 1` in NicheMapR's `micro_terra`; default: `false`).
 - `solar_model`: `SolarProblem` instance (default: `SolarProblem()`).
 - `iterate_day`: number of iterations per day (default: 3).
 - `spinup`: spin up the first day (default: `false`).
@@ -73,6 +77,8 @@ function simulate_microclimate(
     depths = Microclimate.DEFAULT_DEPTHS,
     heights = [0.01, 2.0]u"m",
     runmoist::Bool = false,
+    clearsky::Bool = false,
+    organic_soil_cap::Bool = false,
     solar_model::SolarProblem = SolarProblem(),
     iterate_day::Int = 3,
     spinup::Bool = false,
@@ -81,6 +87,23 @@ function simulate_microclimate(
     kwargs...,
 )
     (; environment_minmax, environment_daily, environment_hourly, latitude, days) = weather
+
+    if clearsky
+        n = length(environment_minmax.cloud_min)
+        environment_minmax = MonthlyMinMaxEnvironment(;
+            reference_temperature_min = environment_minmax.reference_temperature_min,
+            reference_temperature_max = environment_minmax.reference_temperature_max,
+            reference_wind_min        = environment_minmax.reference_wind_min,
+            reference_wind_max        = environment_minmax.reference_wind_max,
+            reference_humidity_min    = environment_minmax.reference_humidity_min,
+            reference_humidity_max    = environment_minmax.reference_humidity_max,
+            cloud_min                 = fill(0.0, n),
+            cloud_max                 = fill(0.0, n),
+            minima_times              = environment_minmax.minima_times,
+            maxima_times              = environment_minmax.maxima_times,
+        )
+    end
+
     # Build (ndepths × ndays) precomputed soil moisture matrix from monthly weather data.
     # Used by Microclimate.jl when runmoist=false to vary soil moisture per day.
     precomputed_soil_moisture = let sm = get(weather, :soil_moisture_monthly, nothing)
@@ -88,9 +111,28 @@ function simulate_microclimate(
             nothing
         else
             # Repeat each monthly value for all depth nodes (uniform with depth).
-            # NicheMapR only sets top 2 nodes; using uniform is more physically consistent.
             repeat(sm', length(depths), 1)  # (ndepths × nmonths)
         end
+    end
+
+    if organic_soil_cap
+        n = length(depths)
+        k_vec = fill(soil_thermal_model.mineral_conductivity, n)
+        c_vec = fill(soil_thermal_model.mineral_heat_capacity, n)
+        k_vec[1] = 0.2u"W/m/K"
+        k_vec[2] = 0.2u"W/m/K"
+        c_vec[1] = 1920.0u"J/kg/K"
+        c_vec[2] = 1920.0u"J/kg/K"
+        soil_thermal_model = CampbelldeVriesSoilThermal(;
+            de_vries_shape_factor = soil_thermal_model.de_vries_shape_factor,
+            mineral_conductivity  = k_vec,
+            mineral_density       = soil_thermal_model.mineral_density,
+            mineral_heat_capacity = c_vec,
+            bulk_density          = soil_thermal_model.bulk_density,
+            saturation_moisture   = soil_thermal_model.saturation_moisture,
+            recirculation_power   = soil_thermal_model.recirculation_power,
+            return_flow_threshold = soil_thermal_model.return_flow_threshold,
+        )
     end
 
     # Build default soil moisture model from soil thermal parameters if not provided
