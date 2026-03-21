@@ -85,8 +85,8 @@ micro_result = simulate_microclimate(
 # Default NicheMapR-equivalent parameters for a generic ~65 kg mammal with fur.
 shape_pars       = example_shape_pars()
 insulation_pars  = example_insulation_pars(; 
-                    insulation_depth_dorsal = 10.0u"mm",
-                    insulation_depth_ventral = 10.0u"mm",
+                    insulation_depth_dorsal = 2.0u"mm",
+                    insulation_depth_ventral = 2.0u"mm",
                     )
 radiation_pars   = example_radiation_pars()
 metabolism_pars  = example_metabolism_pars()
@@ -198,20 +198,26 @@ for step in 1:nsteps
 end
 
 # ── Extract outputs ───────────────────────────────────────────────────────
-T_air_C   = [ustrip(u"°C",   micro_result.profile[i].air_temperature[2])  for i in 1:nsteps]
-T_core_C  = [ustrip(u"°C",   endo_results[i].thermoregulation.T_core)     for i in 1:nsteps]
-Q_gen_W   = [ustrip(u"W",    endo_results[i].energy_fluxes.Q_gen)         for i in 1:nsteps]
-m_evap_gh = [ustrip(u"g/hr", endo_results[i].mass_fluxes.m_evap)          for i in 1:nsteps]
-m_resp_gh = [ustrip(u"g/hr", endo_results[i].mass_fluxes.m_resp)          for i in 1:nsteps]
-m_sweat_gh= [ustrip(u"g/hr", endo_results[i].mass_fluxes.m_sweat)         for i in 1:nsteps]
+T_air_C      = [ustrip(u"°C",   micro_result.profile[i].air_temperature[2])  for i in 1:nsteps]
+T_core_C     = [ustrip(u"°C",   endo_results[i].thermoregulation.T_core)     for i in 1:nsteps]
+Q_gen_W      = [ustrip(u"W",    endo_results[i].energy_fluxes.Q_gen)         for i in 1:nsteps]
+m_evap_gh    = [ustrip(u"g/hr", endo_results[i].mass_fluxes.m_evap)          for i in 1:nsteps]
+m_resp_gh    = [ustrip(u"g/hr", endo_results[i].mass_fluxes.m_resp)          for i in 1:nsteps]
+m_sweat_gh   = [ustrip(u"g/hr", endo_results[i].mass_fluxes.m_sweat)         for i in 1:nsteps]
+shape_b      = [endo_results[i].thermoregulation.shape_b                      for i in 1:nsteps]
+skin_wetness = [endo_results[i].thermoregulation.skin_wetness                 for i in 1:nsteps]
+pant         = [endo_results[i].thermoregulation.pant                         for i in 1:nsteps]
 
-month_ranges  = [(m-1)*24+1 : m*24 for m in 1:ndays]
-month_Ta      = [T_air_C[r]    for r in month_ranges]
-month_Tc      = [T_core_C[r]   for r in month_ranges]
-month_Qg      = [Q_gen_W[r]    for r in month_ranges]
-month_evap    = [m_evap_gh[r]  for r in month_ranges]
-month_resp    = [m_resp_gh[r]  for r in month_ranges]
-month_sweat   = [m_sweat_gh[r] for r in month_ranges]
+month_ranges    = [(m-1)*24+1 : m*24 for m in 1:ndays]
+month_Ta        = [T_air_C[r]       for r in month_ranges]
+month_Tc        = [T_core_C[r]      for r in month_ranges]
+month_Qg        = [Q_gen_W[r]       for r in month_ranges]
+month_evap      = [m_evap_gh[r]     for r in month_ranges]
+month_resp      = [m_resp_gh[r]     for r in month_ranges]
+month_sweat     = [m_sweat_gh[r]    for r in month_ranges]
+month_shape_b   = [shape_b[r]       for r in month_ranges]
+month_wetness   = [skin_wetness[r]  for r in month_ranges]
+month_pant      = [pant[r]          for r in month_ranges]
 
 println("\n── Annual metabolic summary ──")
 println("  Mean Q_gen: $(round(mean(Q_gen_W); digits=2)) W")
@@ -297,3 +303,64 @@ p_evap = heatmap(months, hours, evap_matrix;
     title = "Total evaporative water loss (g/hr)", ylabel = "hour")
 
 display(plot(p_evap; size = (900, 350), left_margin = 6Plots.mm))
+
+# ── Fig. 6 – Posture (shape_b) by month (4×3 grid) ────────────────────────
+sb_ylim = (0.9, max(5.1, maximum(vcat(month_shape_b...)) + 0.2))
+panels_sb = map(1:ndays) do m
+    plot(hours, month_shape_b[m];
+        lw = 2, color = :sienna, label = "",
+        title = months[m], ylabel = "shape b",
+        ylim = sb_ylim, titlefontsize = 9)
+end
+
+display(plot(panels_sb...; layout = (4, 3), size = (1200, 900),
+    xlabel = "hour", left_margin = 4Plots.mm,
+    plot_title = "Posture (shape b) — generic endotherm, Madison WI, 2000"))
+
+# ── Fig. 7 – Skin wetness by month (4×3 grid) ────────────────────────────
+panels_sw = map(1:ndays) do m
+    plot(hours, month_wetness[m];
+        lw = 2, color = :dodgerblue, label = "",
+        title = months[m], ylabel = "skin wetness",
+        ylim = (0.0, max(0.05, maximum(vcat(month_wetness...)) * 1.1)),
+        titlefontsize = 9)
+end
+
+display(plot(panels_sw...; layout = (4, 3), size = (1200, 900),
+    xlabel = "hour", left_margin = 4Plots.mm,
+    plot_title = "Skin wetness — generic endotherm, Madison WI, 2000"))
+
+# ── Fig. 8 – Pant rate by month (4×3 grid) ───────────────────────────────
+pt_ylim = (0.9, max(1.1, maximum(vcat(month_pant...)) * 1.05))
+panels_pt = map(1:ndays) do m
+    plot(hours, month_pant[m];
+        lw = 2, color = :crimson, label = "",
+        title = months[m], ylabel = "pant rate",
+        ylim = pt_ylim, titlefontsize = 9)
+end
+
+display(plot(panels_pt...; layout = (4, 3), size = (1200, 900),
+    xlabel = "hour", left_margin = 4Plots.mm,
+    plot_title = "Pant rate — generic endotherm, Madison WI, 2000"))
+
+# ── Fig. 9 – Annual heatmaps (posture, skin wetness, panting) ─────────────
+sb_matrix  = zeros(Float64, 24, ndays)
+sw_matrix  = zeros(Float64, 24, ndays)
+pt_matrix  = zeros(Float64, 24, ndays)
+for m in 1:ndays
+    sb_matrix[:, m] = month_shape_b[m]
+    sw_matrix[:, m] = month_wetness[m]
+    pt_matrix[:, m] = month_pant[m]
+end
+
+p_sb = heatmap(months, hours, sb_matrix;
+    color = :YlOrBr, colorbar_title = "",
+    title = "Posture (shape b)", ylabel = "hour")
+p_sw = heatmap(months, hours, sw_matrix;
+    color = :Blues, colorbar_title = "",
+    title = "Skin wetness", ylabel = "hour")
+p_pt = heatmap(months, hours, pt_matrix;
+    color = :Reds, colorbar_title = "",
+    title = "Pant rate", ylabel = "hour")
+
+display(plot(p_sb, p_sw, p_pt; layout = (3, 1), size = (900, 800), left_margin = 6Plots.mm))

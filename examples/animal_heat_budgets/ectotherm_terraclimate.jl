@@ -192,6 +192,7 @@ T_body   = [r.T_core     for r in results]
 state    = [r.state      for r in results]
 height   = [r.height     for r in results]
 depth_nd = [r.depth_node for r in results]
+shade    = [r.shade      for r in results]
 T_air    = [low_shade_result.profile[i].air_temperature[1] for i in 1:nsteps]
 
 T_body_C = ustrip.(u"°C", T_body)
@@ -208,6 +209,7 @@ month_Tb     = [T_body_C[r]              for r in month_ranges]
 month_act    = [act[r]                   for r in month_ranges]
 month_Ta     = [ustrip.(u"°C", T_air[r]) for r in month_ranges]
 month_pos    = [pos_cm[r]               for r in month_ranges]
+month_shade  = [shade[r]                for r in month_ranges]
 
 T_active_min_C = ustrip(u"°C", limits.T_active_min)
 T_active_max_C = ustrip(u"°C", limits.T_active_max)
@@ -267,3 +269,72 @@ display(groupedbar(hcat(n_rest, n_bask, n_active);
     size         = (800, 400),
     left_margin  = 5Plots.mm,
 ))
+
+# ── Fig. 4 – Shade selection by month (4×3 grid) ──────────────────────────
+panels_shade = map(1:ndays) do m
+    plot(hours, month_shade[m] .* 100;
+        lw = 2, color = :darkgreen, label = "",
+        title = months[m], ylabel = "%", ylim = (-5, 105), titlefontsize = 9)
+end
+
+display(plot(panels_shade...; layout = (4, 3), size = (1200, 900),
+    xlabel = "hour", left_margin = 4Plots.mm,
+    plot_title = "Shade selection — generic lizard, Madison WI, 2000"))
+
+# ── Fig. 5 – Position by month (height above / depth below ground) ─────────
+depth_cm_max  = ustrip(u"cm", depths[end])
+height_cm_max = ustrip(u"cm", heights[end])
+
+panels_pos = map(1:ndays) do m
+    p = plot(hours, month_pos[m];
+        lw = 2, color = :sienna, label = "",
+        title = months[m], ylabel = "cm",
+        ylim = (-depth_cm_max, height_cm_max), titlefontsize = 9)
+    hline!(p, [0.0]; color = :black, lw = 1, linestyle = :dash, label = "")
+    hspan!(p, [-depth_cm_max, 0]; fillalpha = 0.06, color = :brown, label = "")
+    hspan!(p, [0, height_cm_max]; fillalpha = 0.06, color = :skyblue, label = "")
+    p
+end
+
+display(plot(panels_pos...; layout = (4, 3), size = (1200, 900),
+    xlabel = "hour", left_margin = 4Plots.mm,
+    plot_title = "Position — generic lizard, Madison WI, 2000\n" *
+                 "(above ground +cm, blue; underground −cm, brown)"))
+
+# ── Fig. 6 – Annual heatmaps (shade and position) ─────────────────────────
+# Colour map: stops are anchored to the actual discrete depth/height nodes so
+# that underground always maps to brown, surface (0 cm) to limegreen, and
+# above-ground to sky-blue — regardless of the depth/height vectors chosen.
+pos_clims      = (-depth_cm_max, height_cm_max)
+total_range    = depth_cm_max + height_cm_max
+norm(v)        = (depth_cm_max + v) / total_range   # maps cm value → [0,1]
+pos_shallowest = norm(-ustrip(u"cm", depths[2]))     # shallowest underground node
+pos_surface    = norm(0.0)                           # surface
+pos_lowest_ht  = norm(ustrip(u"cm", heights[2]))     # lowest above-ground node
+pos_cmap = cgrad(
+    [:saddlebrown, :saddlebrown, :limegreen, :limegreen, :skyblue, :steelblue],
+    [0.0,
+     (pos_shallowest + pos_surface) / 2,   # midpoint: shallowest underground → surface
+     pos_surface - 0.001,
+     pos_surface + 0.001,
+     (pos_surface + pos_lowest_ht) / 2,    # midpoint: surface → lowest above-ground node
+     1.0],
+)
+
+shade_matrix = zeros(Float64, 24, ndays)
+pos_matrix   = zeros(Float64, 24, ndays)
+for m in 1:ndays
+    shade_matrix[:, m] = month_shade[m] .* 100
+    pos_matrix[:,   m] = month_pos[m]
+end
+
+p_shade = heatmap(months, hours, shade_matrix;
+    color = :Greens, clims = (0, 100),
+    colorbar_title = "%", title = "Shade selection (%)", ylabel = "hour")
+
+p_pos = heatmap(months, hours, pos_matrix;
+    color = pos_cmap, clims = pos_clims,
+    colorbar_title = "cm (+ above, − below)",
+    title = "Position (cm above/below ground)", ylabel = "hour")
+
+display(plot(p_shade, p_pos; layout = (2, 1), size = (900, 600), left_margin = 6Plots.mm))
