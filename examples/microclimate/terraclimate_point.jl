@@ -82,13 +82,24 @@ soil_thermal_model = CampbelldeVriesSoilThermal(;
 )
 
 # ---------------------------------------------------------------------------
-# Step 4: simulate
+# Step 4: optionally apply a climate change scenario
+# ---------------------------------------------------------------------------
+# Swap Historical for TerraClimate{Plus2C} or TerraClimate{Plus4C} to shift
+# the weather forcing by the TerraClimate scenario deltas.  The baseline
+# weather download (Step 1) is always from the historical record; the scenario
+# only modifies the environment structs passed to simulate_microclimate.
+weather_scenario = apply_climate_scenario(Historical, weather, lon, lat)
+# weather_scenario = apply_climate_scenario(TerraClimate{Plus2C}, weather, lon, lat; ystart = 2000)
+# weather_scenario = apply_climate_scenario(TerraClimate{Plus4C}, weather, lon, lat; ystart = 2000)
+
+# ---------------------------------------------------------------------------
+# Step 5: simulate
 # ---------------------------------------------------------------------------
 result = simulate_microclimate(
     solar_terrain,
     micro_terrain,
     soil_thermal_model,
-    weather;
+    weather_scenario;
     depths   = [0, 2.5, 5, 10, 15, 20, 30, 50, 100, 200]u"cm",
     heights  = [0.01, 2.0]u"m",
     runmoist = false,

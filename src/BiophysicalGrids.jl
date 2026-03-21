@@ -11,10 +11,16 @@ using SolarRadiation
 using FluidProperties
 using FluidProperties: GoffGratch, Teten, Huang, VapourPressureEquation
 
+using GeoFormatTypes
 using RasterDataSources
 using NCDatasets       # triggers Rasters NCDatasets extension for NetCDF support
 using Rasters
-using Rasters: X, Y, Ti, Near
+using Rasters: X, Y, Ti, Near, Between, lookup
+
+# ---------------------------------------------------------------------------
+# Terrain utilities
+# ---------------------------------------------------------------------------
+include("Terrain/terrain_utils.jl")
 
 # ---------------------------------------------------------------------------
 # Mesoclimate adjustments
@@ -26,6 +32,7 @@ include("Mesoclimate/Mesoclimate.jl")
 # ---------------------------------------------------------------------------
 include("WeatherDataSources/common.jl")
 include("WeatherDataSources/TerraClimate.jl")
+include("WeatherDataSources/climate_scenarios.jl")
 
 # ---------------------------------------------------------------------------
 # Exports
@@ -53,8 +60,12 @@ export
     Plus4C,
     # Weather data
     get_weather,
+    apply_climate_scenario,
     # Simulation
     simulate_microclimate,
+    # Terrain utilities
+    get_utm_crs,
+    compute_horizon_angles,
     # FluidProperties vapour pressure methods (not exported by FluidProperties itself)
     VapourPressureEquation,
     GoffGratch,
