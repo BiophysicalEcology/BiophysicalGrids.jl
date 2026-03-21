@@ -49,6 +49,7 @@ export
     lapse_rate,
     lapse_adjust_temperature,
     dewpoint_lapse_adjust,
+    rh_at_temperature,
     # Cloud / radiation
     cloud_from_srad,
     # Wind
@@ -65,6 +66,8 @@ export
     MicroTerrain,
     CampbelldeVriesSoilThermal,
     DailyTimeseries,
+    MonthlyMinMaxEnvironment,
+    HourlyTimeseries,
     # Simulation
     simulate_microclimate,
     # Terrain utilities

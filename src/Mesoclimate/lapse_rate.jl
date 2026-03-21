@@ -83,3 +83,24 @@ dewpoint_lapse_adjust(T_dew, Δz) = T_dew - DEWPOINT_LAPSE_RATE * Δz
 
 dewpoint_lapse_adjust(T_dew::AbstractVector, Δz) =
     dewpoint_lapse_adjust.(T_dew, Ref(Δz))
+
+"""
+    rh_at_temperature(rh, T_ref, T_new, method=GoffGratch())
+
+Convert relative humidity `rh` (0–1) measured at reference temperature `T_ref` to the
+equivalent relative humidity at a new temperature `T_new`, conserving actual vapour
+pressure (dry adiabatic / isohypsic approximation).
+
+Accepts scalars or vectors. Both temperatures must be Unitful (K or °C).
+Typical use: adjust RH when correcting air temperature for an elevation difference.
+
+# Example
+```julia
+rh_at_temperature(0.6, 300.0u"K", 294.0u"K")   # higher elevation → higher RH
+```
+"""
+function rh_at_temperature(rh, T_ref, T_new, method = GoffGratch())
+    e_act = rh .* vapour_pressure.(Ref(method), T_ref)
+    e_sat = vapour_pressure.(Ref(method), T_new)
+    return clamp.(ustrip.(e_act ./ e_sat), 0.0, 1.0)
+end
