@@ -61,6 +61,10 @@ export
     # Weather data
     get_weather,
     apply_climate_scenario,
+    # Microclimate types (re-exported from Microclimate.jl)
+    MicroTerrain,
+    CampbelldeVriesSoilThermal,
+    DailyTimeseries,
     # Simulation
     simulate_microclimate,
     # Terrain utilities

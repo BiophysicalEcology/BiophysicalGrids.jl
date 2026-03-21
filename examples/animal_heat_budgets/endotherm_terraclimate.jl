@@ -15,6 +15,7 @@ using BiophysicalGrids
 using BiophysicalBehaviour
 using HeatExchange
 using BiophysicalGeometry
+using Microclimate
 using SolarRadiation
 using FluidProperties
 using ConstructionBase
@@ -83,7 +84,10 @@ micro_result = simulate_microclimate(
 # ── Step 4: Set up endotherm ──────────────────────────────────────────────
 # Default NicheMapR-equivalent parameters for a generic ~65 kg mammal with fur.
 shape_pars       = example_shape_pars()
-insulation_pars  = example_insulation_pars()
+insulation_pars  = example_insulation_pars(; 
+                    insulation_depth_dorsal = 10.0u"mm",
+                    insulation_depth_ventral = 10.0u"mm",
+                    )
 radiation_pars   = example_radiation_pars()
 metabolism_pars  = example_metabolism_pars()
 evaporation_pars = example_evaporation_pars()
@@ -100,6 +104,10 @@ mean_fibre_density    = insulation_pars.dorsal.density * (1 - radiation_pars.ven
                         insulation_pars.ventral.density * radiation_pars.ventral_fraction
 fur      = Fur(mean_insulation_depth, mean_fibre_diameter, mean_fibre_density)
 geometry = Body(shape_pars, CompositeInsulation(fur, fat))
+
+# Plot the initial shape if interested
+# using CairoMakie
+# fig = plot_cross_sections(geometry)
 
 physiology_traits = HeatExchangeTraits(
     shape_pars,
