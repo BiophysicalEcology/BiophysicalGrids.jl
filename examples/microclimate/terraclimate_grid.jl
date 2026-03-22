@@ -29,6 +29,7 @@ using SolarRadiation
 using FluidProperties
 using Unitful
 using Statistics: median
+using Printf
 using Plots
 import Plots: heatmap, plot, savefig
 
@@ -55,10 +56,14 @@ depths  = [0.0, 2.5, 5.0, 10.0, 15.0, 20.0, 30.0, 50.0, 100.0, 200.0]u"cm"
 heights = [0.01, 2.0]u"m"
 
 # Time snapshots: step index is 1-based (hour + 1)
-snapshot_hours = [0, 6, 9, 12, 15, 18]
-snapshot_steps = snapshot_hours .+ 1
-hour_labels    = ["Midnight", "Dawn", "Mid-morning", "Midday", "Mid-afternoon", "Dusk"]
-nhours         = length(snapshot_hours)
+snapshot_hours = collect(0:23)          # all 24 hours of the day
+snapshot_steps = snapshot_hours .+ 1   # 1-based step index within the day
+hour_labels    = [@sprintf("%02d:00", h) for h in snapshot_hours]
+nhours         = length(snapshot_hours)   # 24
+
+# Subset used for the static 2×3 panel plots (6 representative hours)
+panel_ks  = [1, 7, 10, 13, 16, 19]    # indices into snapshot_hours: 00,06,09,12,15,18
+panel_labels = ["Midnight", "Dawn", "Mid-morning", "Midday", "Mid-afternoon", "Dusk"]
 
 # ============================================================================
 # Step 1: Download SRTM tile and crop to study area
@@ -396,16 +401,46 @@ function plot_variable(data4d, var_label, fname)
     all_vals = filter(!isnan, vec(data4d))
     isempty(all_vals) && return
     clims = (minimum(all_vals), maximum(all_vals))
+    nframes = size(data4d, 3)
 
-    panels = [heatmap(x_coords_utm, y_plt, flipy(data4d[:, :, k]);
+    # For a 2×3 layout pick 6 evenly-spaced frames; for ≤6 use all
+    ks = nframes <= 6 ? (1:nframes) : panel_ks
+    ls = nframes <= 6 ? hour_labels[1:nframes] : panel_labels
+
+    panels = [heatmap(x_coords_utm, y_plt, flipy(data4d[:, :, ks[n]]);
         color = cgrad(:RdYlBu, rev = true), clims = clims,
-        title = hour_labels[k], colorbar_title = "°C",
-        titlefontsize = 9, common_kw...) for k in 1:nhours]
+        title = ls[n], colorbar_title = "°C",
+        titlefontsize = 9, common_kw...) for n in eachindex(ks)]
 
-    display(plot(panels...; layout = (2, 3), size = (1400, 900),
+    nr = nframes <= 6 ? 2 : 2
+    nc = nframes <= 6 ? 3 : 3
+    display(plot(panels...; layout = (nr, nc), size = (1400, 900),
         left_margin = 5Plots.mm,
         plot_title = "$var_label — Chamonix, July $year"))
     savefig(fname)
+    println("  Saved $fname")
+end
+
+function animate_variable(data4d, var_label, fname; framerate = 4)
+    all_vals = filter(!isnan, vec(data4d))
+    isempty(all_vals) && return
+    clims = (minimum(all_vals), maximum(all_vals))
+    nframes = size(data4d, 3)
+    # Labels: use snapshot_hours if lengths match, otherwise just frame indices
+    labels_here = nframes == length(snapshot_hours) ?
+        [@sprintf("%02d:00", snapshot_hours[k]) for k in 1:nframes] :
+        [@sprintf("frame %d", k) for k in 1:nframes]
+
+    anim = @animate for k in 1:nframes
+        heatmap(x_coords_utm, y_plt, flipy(data4d[:, :, k]);
+            color = cgrad(:RdYlBu, rev = true), clims = clims,
+            title = "$var_label\n$(labels_here[k]) — Chamonix, July $year",
+            xlabel = "Easting (m)", ylabel = "Northing (m)",
+            colorbar_title = "°C", aspect_ratio = :equal,
+            titlefontsize = 9, size = (700, 600),
+            left_margin = 5Plots.mm, bottom_margin = 5Plots.mm)
+    end
+    gif(anim, fname; fps = framerate)
     println("  Saved $fname")
 end
 
@@ -414,6 +449,12 @@ plot_variable(T_soil0,  "Soil surface temperature (°C)",  "chamonix_july_Tsoil0
 plot_variable(T_air1,   "Air temperature at 1 cm (°C)",   "chamonix_july_Tair1cm.png")
 plot_variable(T_soil5,  "Soil temperature at 5 cm (°C)",  "chamonix_july_Tsoil5cm.png")
 plot_variable(T_soil20, "Soil temperature at 20 cm (°C)", "chamonix_july_Tsoil20cm.png")
+
+println("Animating...")
+animate_variable(T_soil0,  "Soil surface temperature (°C)",  "chamonix_july_Tsoil0.gif")
+animate_variable(T_air1,   "Air temperature at 1 cm (°C)",   "chamonix_july_Tair1cm.gif")
+animate_variable(T_soil5,  "Soil temperature at 5 cm (°C)",  "chamonix_july_Tsoil5cm.gif")
+animate_variable(T_soil20, "Soil temperature at 20 cm (°C)", "chamonix_july_Tsoil20cm.gif")
 
 println("\nDone. $(nx_utm)×$(ny_utm) pixel grid, July $year, " *
         "$(nhours) time snapshots ($(join(snapshot_hours, ", ")) h).")
