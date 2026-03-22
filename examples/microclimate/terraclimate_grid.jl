@@ -75,7 +75,7 @@ panel_labels = ["Midnight", "Dawn", "Mid-morning", "Midday", "Mid-afternoon", "D
 # Step 1: Download SRTM tile and crop to study area
 # ============================================================================
 
-println("Downloading SRTM tile covering study area...")
+println("Obtaining SRTM tile covering study area...")
 tile_paths  = getraster(SRTM; bounds = (lon_min, lat_min, lon_max, lat_max))
 valid_paths = filter(!ismissing, vec(tile_paths))
 isempty(valid_paths) && error("No SRTM tile found for the requested bounds.")
@@ -194,7 +194,7 @@ pressure_r    = map(e -> ismissing(e) ? missing : atmospheric_pressure(e), eleva
 # carries this annual mean in deep_soil_temperature (same value every month).
 # ============================================================================
 
-println("Downloading TerraClimate weather for year $year...")
+println("Obtaining TerraClimate weather for year $year...")
 
 valid_elev    = filter(!isnan, vec(dem_data))
 center_elev_u = median(valid_elev) * u"m"
@@ -373,7 +373,8 @@ Threads.@threads for j in 1:nx_utm
         result = simulate_microclimate(
             st, mt, soil_thermal_model, wp;
             depths, heights, solar_model,
-            initial_soil_temperature = T_init,
+            initial_soil_temperature  = T_init,
+            vapour_pressure_equation  = vp_method,
         )
 
         for (k, s) in enumerate(snapshot_steps)
