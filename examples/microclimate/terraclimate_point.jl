@@ -100,11 +100,12 @@ result = simulate_microclimate(
     micro_terrain,
     soil_thermal_model,
     weather_scenario;
-    depths   = [0, 2.5, 5, 10, 15, 20, 30, 50, 100, 200]u"cm",
-    heights  = [0.01, 2.0]u"m",
-    runmoist = false,
-    clearsky = false,
-    organic_soil_cap = true,
+    depths                   = [0, 2.5, 5, 10, 15, 20, 30, 50, 100, 200]u"cm",
+    heights                  = [0.01, 2.0]u"m",
+    runmoist                 = false,
+    clearsky                 = false,
+    organic_soil_cap         = true,
+    vapour_pressure_equation = GoffGratch(),
 )
 
 # Quick inspection of outputs
@@ -115,26 +116,47 @@ air_T  = [p.air_temperature for p in result.profile]  # per-height air temp
 
 # # ---------------------------------------------------------------------------
 # # Sensitivity: swap vapour pressure equation
+# # The method must be set consistently in get_weather (humidity lapse correction),
+# # apply_climate_scenario (scenario humidity adjustment), and simulate_microclimate
+# # (boundary-layer and soil-energy calculations).
 # # ---------------------------------------------------------------------------
-# weather_teten = get_weather(TerraClimate, lon, lat;
+# vp = Huang()   # faster than GoffGratch(); also try Teten() for maximum speed
+# weather_huang = get_weather(TerraClimate, lon, lat;
 #     ystart = 2000,
 #     elevation,
-#     vapour_pressure_method = Teten(),
+#     vapour_pressure_method = vp,
 # )
-# result_teten = simulate_microclimate(
-#     solar_terrain, micro_terrain, soil_thermal_model, weather_teten
+# scenario_huang = apply_climate_scenario(Historical, weather_huang, lon, lat;
+#     vapour_pressure_method = vp,
 # )
+# result_huang = simulate_microclimate(
+#     solar_terrain, micro_terrain, soil_thermal_model, scenario_huang;
+#     depths                   = [0, 2.5, 5, 10, 15, 20, 30, 50, 100, 200]u"cm",
+#     heights                  = [0.01, 2.0]u"m",
+#     runmoist                 = false,
+#     clearsky                 = false,
+#     organic_soil_cap         = true,
+#     vapour_pressure_equation = vp,
+# )
+# result = result_huang
 
 # # ---------------------------------------------------------------------------
-# # Sensitivity: with dry adiabatic lapse rate
+# # Sensitivity: dry adiabatic lapse rate
 # # ---------------------------------------------------------------------------
 # weather_dry = get_weather(TerraClimate, lon, lat;
 #     ystart = 2000,
 #     elevation,
-#     lapse_rate_type = DryAdiabaticLapseRate(),
+#     lapse_rate_type        = DryAdiabaticLapseRate(),
+#     vapour_pressure_method = GoffGratch(),
+# )
+# scenario_dry = apply_climate_scenario(Historical, weather_dry, lon, lat;
+#     vapour_pressure_method = GoffGratch(),
 # )
 # result_dry = simulate_microclimate(
-#     solar_terrain, micro_terrain, soil_thermal_model, weather_dry
+#     solar_terrain, micro_terrain, soil_thermal_model, scenario_dry;
+#     depths                   = [0, 2.5, 5, 10, 15, 20, 30, 50, 100, 200]u"cm",
+#     heights                  = [0.01, 2.0]u"m",
+#     vapour_pressure_equation = GoffGratch(),
 # )
 
 # # ---------------------------------------------------------------------------
@@ -143,9 +165,16 @@ air_T  = [p.air_temperature for p in result.profile]  # per-height air temp
 # weather_3yr = get_weather(TerraClimate, lon, lat;
 #     ystart = 2000, yfinish = 2002,
 #     elevation,
+#     vapour_pressure_method = GoffGratch(),
+# )
+# scenario_3yr = apply_climate_scenario(Historical, weather_3yr, lon, lat;
+#     vapour_pressure_method = GoffGratch(),
 # )
 # result_3yr = simulate_microclimate(
-#     solar_terrain, micro_terrain, soil_thermal_model, weather_3yr
+#     solar_terrain, micro_terrain, soil_thermal_model, scenario_3yr;
+#     depths                   = [0, 2.5, 5, 10, 15, 20, 30, 50, 100, 200]u"cm",
+#     heights                  = [0.01, 2.0]u"m",
+#     vapour_pressure_equation = GoffGratch(),
 # )
 # @show size(result_3yr.soil_temperature)  # should be (36*24, ndepths)
 
