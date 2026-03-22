@@ -24,7 +24,7 @@ UnitfulMoles = "999f2bd7-36bf-5ba7-9bc1-c9473aa75374"
 [sources]
 BiophysicalBehaviour = {rev = "main", url = "https://github.com/BiophysicalEcology/BiophysicalBehaviour.jl"}
 FluidProperties = {rev = "main", url = "https://github.com/BiophysicalEcology/FluidProperties.jl"}
-Microclimate = {rev = "harmonise-depth-vectors", url = "https://github.com/BiophysicalEcology/Microclimate.jl"}
+Microclimate = {rev = "main", url = "https://github.com/BiophysicalEcology/Microclimate.jl"}
 SolarRadiation = {rev = "main", url = "https://github.com/BiophysicalEcology/SolarRadiation.jl"}
 
 [compat]

@@ -27,6 +27,7 @@ using GeoFormatTypes: EPSG
 using Geomorphometry
 using SolarRadiation
 using FluidProperties
+using FluidProperties: Teten, Huang, GoffGratch, VPLookupTable
 using Unitful
 using Statistics: median
 using Printf
@@ -40,8 +41,8 @@ import Plots: heatmap, plot, savefig
 # Study area: above Chamonix, French Alps — same extent as grid_solar.jl
 center_lon = 6.87     # °E
 center_lat = 45.92    # °N
-extent_lat = 0.0833   # ~100 SRTM pixels N–S
-extent_lon = 0.120    # ~100 SRTM pixels E–W
+extent_lat = 0.0833/4   # ~100 SRTM pixels N–S
+extent_lon = 0.120/4    # ~100 SRTM pixels E–W
 
 lon_min = center_lon - extent_lon / 2
 lon_max = center_lon + extent_lon / 2
@@ -59,7 +60,8 @@ heights = [0.01, 2.0]u"m"
 # GoffGratch() is the most accurate but slowest; alternatives from FluidProperties:
 #   Teten() — simple empirical, fastest
 #   Huang()  — more accurate than Teten, faster than GoffGratch
-vp_method = Teten()
+lut = VPLookupTable()
+vp_method = lut #GoffGratch()
 
 # Time snapshots: step index is 1-based (hour + 1)
 snapshot_hours = collect(0:23)          # all 24 hours of the day
@@ -327,7 +329,7 @@ progress_lock = ReentrantLock()
 n_done        = Ref(0)
 n_total       = nx_utm * ny_utm
 
-Threads.@threads for j in 1:nx_utm
+@time Threads.@threads for j in 1:nx_utm
     for i in 1:ny_utm
         ri, rj = data_is_xy ? (j, i) : (i, j)
 
