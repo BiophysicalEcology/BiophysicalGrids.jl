@@ -55,6 +55,12 @@ n_horizon_angles = 24
 depths  = [0.0, 2.5, 5.0, 10.0, 15.0, 20.0, 30.0, 50.0, 100.0, 200.0]u"cm"
 heights = [0.01, 2.0]u"m"
 
+# Vapour pressure formula used in humidity lapse correction.
+# GoffGratch() is the most accurate but slowest; alternatives from FluidProperties:
+#   Teten() — simple empirical, fastest
+#   Huang()  — more accurate than Teten, faster than GoffGratch
+vp_method = Teten()
+
 # Time snapshots: step index is 1-based (hour + 1)
 snapshot_hours = collect(0:23)          # all 24 hours of the day
 snapshot_steps = snapshot_hours .+ 1   # 1-based step index within the day
@@ -274,7 +280,7 @@ solar_model = SolarProblem()
 # Lapse-correct temperature and humidity for a given elevation difference (Δz = pixel − center).
 # Humidity is adjusted by conserving actual vapour pressure (dry adiabatic approximation)
 # using BiophysicalGrids.rh_at_temperature.
-function lapse_correct_weather(ws, elev_diff)
+function lapse_correct_weather(ws, elev_diff; method = vp_method)
     mm = ws.environment_minmax
     ed = ws.environment_daily
     T_min_new = lapse_adjust_temperature(mm.reference_temperature_min, elev_diff, EnvironmentalLapseRate())
@@ -285,8 +291,8 @@ function lapse_correct_weather(ws, elev_diff)
         reference_wind_min        = mm.reference_wind_min,
         reference_wind_max        = mm.reference_wind_max,
         # RH_min pairs with T_max time; RH_max pairs with T_min time
-        reference_humidity_min    = rh_at_temperature(mm.reference_humidity_min, mm.reference_temperature_max, T_max_new),
-        reference_humidity_max    = rh_at_temperature(mm.reference_humidity_max, mm.reference_temperature_min, T_min_new),
+        reference_humidity_min    = rh_at_temperature(mm.reference_humidity_min, mm.reference_temperature_max, T_max_new, method),
+        reference_humidity_max    = rh_at_temperature(mm.reference_humidity_max, mm.reference_temperature_min, T_min_new, method),
         cloud_min                 = mm.cloud_min,
         cloud_max                 = mm.cloud_max,
         minima_times              = mm.minima_times,
