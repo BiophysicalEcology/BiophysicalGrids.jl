@@ -8,8 +8,9 @@
 #   5. Plot soil surface T, air T at 1 cm, soil T at 5 cm, soil T at 20 cm
 #      at 6 times of day: midnight, dawn, mid-morning, midday, mid-afternoon, dusk
 #
-# Each pixel runs a single July representative day (24 hours) with iterate_day=3
-# (the default) so near-surface soil temperatures converge within the day.
+# Each pixel runs a single July representative day (24 hours) with up to iterate_day=10
+# passes (the default), stopping early when the maximum nodal temperature change is
+# below convergence_tolerance=0.1 K, so near-surface soil temperatures converge.
 # The deep soil boundary condition is the annual mean temperature at each pixel
 # (lapse-corrected from center elevation), computed from the full TerraClimate
 # annual record.

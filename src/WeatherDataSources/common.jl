@@ -58,7 +58,10 @@ appropriate parameters for the simulation site.
   `mineral_conductivity = 0.2 W/m/K` and `mineral_heat_capacity = 1920 J/kg/K` for
   those nodes (equivalent to `cap = 1` in NicheMapR's `micro_terra`; default: `false`).
 - `solar_model`: `SolarProblem` instance (default: `SolarProblem()`).
-- `iterate_day`: number of iterations per day (default: 3).
+- `iterate_day`: maximum number of iterations per day (default: 10).
+- `convergence_tolerance`: stop iterating when the maximum nodal temperature
+  change between passes is below this value (default: `0.1u"K"`).  Set to
+  `nothing` to always run exactly `iterate_day` passes.
 - `spinup`: spin up the first day (default: `false`).
 - `initial_soil_temperature`: initial soil temperatures. Defaults to `nothing`,
   which lets Microclimate.jl use the mean air temperature of each month as the
@@ -80,7 +83,8 @@ function simulate_microclimate(
     clearsky::Bool = false,
     organic_soil_cap::Bool = false,
     solar_model::SolarProblem = SolarProblem(),
-    iterate_day::Int = 3,
+    iterate_day::Int = 10,
+    convergence_tolerance = 0.1u"K",
     spinup::Bool = false,
     initial_soil_temperature = nothing,
     initial_soil_moisture = fill(0.42 * 0.25, length(depths)),
@@ -163,6 +167,7 @@ function simulate_microclimate(
         environment_daily,
         environment_hourly,
         iterate_day,
+        convergence_tolerance,
         runmoist,
         spinup,
         initial_soil_temperature,
