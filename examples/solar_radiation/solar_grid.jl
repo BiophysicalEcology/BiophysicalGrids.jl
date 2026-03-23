@@ -218,6 +218,24 @@ display(heatmap(x_coords_utm, y_plt, ascending_y(y_coords_utm, daily_MJ)[2];
 savefig("chamonix_solar_daily.png")
 println("  Saved chamonix_solar_daily.png")
 
+# ── Fig. 5: Animated solar radiation — one frame per hour ──────────────────
+println("Animating...")
+
+solar_clims = (0.0, maximum(all_vals))
+
+anim_solar = @animate for k in 1:length(hours_vec)
+    frame = Float64.(coalesce.(global_terrain_hours[k], NaN))
+    _, frame_plt = ascending_y(y_coords_utm, frame)
+    heatmap(x_coords_utm, y_plt, frame_plt;
+        color = :inferno, clims = solar_clims,
+        title = "Global terrain radiation — $(fmt_h(hours_vec[k]))\nDay $simulation_day (summer solstice), Chamonix",
+        colorbar_title = "W/m²", common_kw...,
+        titlefontsize = 9, size = (700, 600),
+        left_margin = 5Plots.mm, bottom_margin = 5Plots.mm)
+end
+gif(anim_solar, "chamonix_solar.gif"; fps = 4)
+println("  Saved chamonix_solar.gif")
+
 println("\nDone! $(nx_utm)×$(ny_utm) pixel grid, day $simulation_day, " *
         "$(length(hours_vec)) hours simulated.")
 println("Daily solar range: $(round(minimum(valid_d); digits=1)) – " *

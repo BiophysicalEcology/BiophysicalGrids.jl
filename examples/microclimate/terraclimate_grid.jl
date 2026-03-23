@@ -38,8 +38,8 @@ import Plots: heatmap, plot, savefig
 # Study area: above Chamonix, French Alps — same extent as grid_solar.jl
 center_lon = 6.87     # °E
 center_lat = 45.92    # °N
-extent_lat = 0.0833/4   # ~100 SRTM pixels N–S
-extent_lon = 0.120/4    # ~100 SRTM pixels E–W
+extent_lat = 0.0833   # ~100 SRTM pixels N–S
+extent_lon = 0.120    # ~100 SRTM pixels E–W
 
 lon_min = center_lon - extent_lon / 2
 lon_max = center_lon + extent_lon / 2
@@ -287,6 +287,7 @@ T_init_buffers = [fill(0.0u"K", 10) for _ in 1:Threads.maxthreadid()]
         atmospheric_pressure = pres,
         horizon_angles       = @view(horizons_u[i, j, :]),
     )
+
     mt = MicroTerrain(;
         elevation        = elev,
         roughness_height = 0.004u"m",
@@ -294,7 +295,7 @@ T_init_buffers = [fill(0.0u"K", 10) for _ in 1:Threads.maxthreadid()]
         dyer_constant    = 16.0,
         viewfactor       = 1.0,
     )
-    GC.gc(); GC.gc()   # force a full collection first
+    
     result = simulate_microclimate(
         st, mt, soil_thermal_model, wp;
         depths, heights, solar_model,
