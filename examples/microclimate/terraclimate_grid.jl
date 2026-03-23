@@ -11,6 +11,9 @@
 # Each pixel runs a single July representative day (24 hours) with up to iterate_day=10
 # passes (the default), stopping early when the maximum nodal temperature change is
 # below convergence_tolerance=0.1 K, so near-surface soil temperatures converge.
+# Rows are processed sequentially; each pixel is warm-started from the converged
+# midnight soil-temperature profile of the pixel directly above it, reducing the
+# iterations needed to converge.  Columns within each row are parallelised.
 # The deep soil boundary condition is the annual mean temperature at each pixel
 # (lapse-corrected from center elevation), computed from the full TerraClimate
 # annual record.
@@ -241,80 +244,95 @@ end
 
 # Output arrays (ny, nx, nhours) — temperatures extracted in-loop; MicroResult discarded
 T_soil0  = fill(NaN, ny_utm, nx_utm, nhours)  # soil surface (depth idx 1)
-T_air1   = fill(NaN, ny_utm, nx_utm, nhours)  # air at 1 cm  (height idx 2, reversed)
-T_soil5  = fill(NaN, ny_utm, nx_utm, nhours)  # soil at 5 cm (depth idx 3)
-T_soil20 = fill(NaN, ny_utm, nx_utm, nhours)  # soil at 20 cm (depth idx 6)
+T_air1   = fill(NaN, ny_utm, nx_utm, nhours)  # air at 1 cm  (height idx 2)
+T_air2   = fill(NaN, ny_utm, nx_utm, nhours)  # air at 2 m   (height idx 1, reference)
+T_soil10 = fill(NaN, ny_utm, nx_utm, nhours)  # soil at 10 cm (depth idx 4)
 
-n_total        = nx_utm * ny_utm
-n_done         = Threads.Atomic{Int}(0)
-T_init_buffers = [fill(0.0u"K", 10) for _ in 1:Threads.maxthreadid()]
+n_total = nx_utm * ny_utm
+n_done  = Threads.Atomic{Int}(0)
 
-@time Threads.@threads :static for I in CartesianIndices((ny_utm, nx_utm))
-    i, j  = I[1], I[2]
-    ri, rj = data_is_xy ? (j, i) : (i, j)
+# Spatial warm-start: store the converged midnight soil-temperature profile for
+# each completed pixel so the row below can use it as initial_soil_temperature.
+# Rows are processed sequentially; columns within each row run in parallel.
+# The first row uses an elevation-based estimate; subsequent rows use the
+# converged profile from the pixel directly above (same column), which has
+# similar elevation and hence a similar diurnal temperature regime.
+T_converged = fill!(Matrix{Any}(undef, ny_utm, nx_utm), nothing)
 
-    elev = elevation_m[ri, rj]
-    lat  = latitude_deg[ri, rj]
-    lon  = longitude_deg[ri, rj]
-    slp  = slope_deg[ri,    rj]
-    asp  = aspect_deg[ri,   rj]
-    pres = pressure_r[ri,   rj]
+@time for i in 1:ny_utm
+    Threads.@threads :static for j in 1:nx_utm
+        ri, rj = data_is_xy ? (j, i) : (i, j)
 
-    if ismissing(elev) || ismissing(lat) || ismissing(lon) ||
-       ismissing(slp)  || ismissing(asp) || ismissing(pres)
-        continue
-    end
+        elev = elevation_m[ri, rj]
+        lat  = latitude_deg[ri, rj]
+        lon  = longitude_deg[ri, rj]
+        slp  = slope_deg[ri,    rj]
+        asp  = aspect_deg[ri,   rj]
+        pres = pressure_r[ri,   rj]
 
-    wp         = wp_grid[i, j]
-    Tmean_july = Tmean_grid[i, j]
-    Tdeep      = Tdeep_grid[i, j]
+        if ismissing(elev) || ismissing(lat) || ismissing(lon) ||
+           ismissing(slp)  || ismissing(asp) || ismissing(pres)
+            continue
+        end
 
-    # Thread-local buffer for initial soil temperature profile (avoids allocation):
-    # 0–50 cm (idx 1–8): July mean; 100 cm (idx 9): midpoint; 200 cm (idx 10): annual mean
-    T_init = T_init_buffers[Threads.threadid()]
-    @inbounds begin
-        T_init[1:8] .= Tmean_july
-        T_init[9]    = (Tmean_july + Tdeep) / 2
-        T_init[10]   = Tdeep
-    end
+        wp         = wp_grid[i, j]
+        Tmean_july = Tmean_grid[i, j]
+        Tdeep      = Tdeep_grid[i, j]
 
-    st = SolarTerrain(;
-        latitude             = lat,
-        longitude            = lon,
-        elevation            = elev,
-        slope                = slp,
-        aspect               = asp,
-        albedo               = 0.15,
-        atmospheric_pressure = pres,
-        horizon_angles       = @view(horizons_u[i, j, :]),
-    )
+        # Warm-start from converged midnight profile of pixel above (if available).
+        # Falls back to elevation-based estimate for the first row or missing neighbors.
+        T_init = if i > 1 && !isnothing(T_converged[i - 1, j])
+            T_converged[i - 1, j]
+        else
+            T_tmp      = Vector{typeof(1.0u"K")}(undef, 10)
+            T_tmp[1:8] .= Tmean_july
+            T_tmp[9]    = (Tmean_july + Tdeep) / 2
+            T_tmp[10]   = Tdeep
+            T_tmp
+        end
 
-    mt = MicroTerrain(;
-        elevation        = elev,
-        roughness_height = 0.004u"m",
-        karman_constant  = 0.4,
-        dyer_constant    = 16.0,
-        viewfactor       = 1.0,
-    )
-    
-    result = simulate_microclimate(
-        st, mt, soil_thermal_model, wp;
-        depths, heights, solar_model,
-        initial_soil_temperature = T_init,
-        vapour_pressure_equation = vp_method,
-    )
+        st = SolarTerrain(;
+            latitude             = lat,
+            longitude            = lon,
+            elevation            = elev,
+            slope                = slp,
+            aspect               = asp,
+            albedo               = 0.15,
+            atmospheric_pressure = pres,
+            horizon_angles       = @view(horizons_u[i, j, :]),
+        )
 
-    @inbounds for (k, s) in enumerate(snapshot_steps)
-        T_soil0[i,  j, k] = ustrip(u"°C", result.soil_temperature[s, 1])
-        T_air1[i,   j, k] = ustrip(u"°C", result.profile[s].air_temperature[2])
-        T_soil5[i,  j, k] = ustrip(u"°C", result.soil_temperature[s, 3])
-        T_soil20[i, j, k] = ustrip(u"°C", result.soil_temperature[s, 6])
-    end
+        mt = MicroTerrain(;
+            elevation        = elev,
+            roughness_height = 0.004u"m",
+            karman_constant  = 0.4,
+            dyer_constant    = 16.0,
+            viewfactor       = 1.0,
+        )
 
-    d = Threads.atomic_add!(n_done, 1)
-    if Threads.threadid() == 1 && (d % 200 == 0 || d == n_total - 1)
-        pct = round(100 * (d + 1) / n_total; digits = 1)
-        print("  $(d+1) / $n_total ($pct%)   \r")
+        result = simulate_microclimate(
+            st, mt, soil_thermal_model, wp;
+            depths, heights, solar_model,
+            initial_soil_temperature = T_init,
+            vapour_pressure_equation = vp_method,
+            iterate_day = 5,
+        )
+
+        # Save midnight (hour 0) profile as warm-start seed for the row below.
+        T_converged[i, j] = collect(result.soil_temperature[1, :])
+
+        @inbounds for (k, s) in enumerate(snapshot_steps)
+            T_soil0[i,  j, k] = ustrip(u"°C", result.soil_temperature[s, 1])
+            T_air1[i,   j, k] = ustrip(u"°C", result.profile[s].air_temperature[1])
+            T_air2[i,   j, k] = ustrip(u"°C", result.profile[s].air_temperature[2])
+            T_soil10[i, j, k] = ustrip(u"°C", result.soil_temperature[s, 4])
+        end
+
+        d = Threads.atomic_add!(n_done, 1)
+        if Threads.threadid() == 1 && (d % nx_utm == 0 || d == n_total - 1)
+            pct = round(100 * (d + 1) / n_total; digits = 1)
+            print("  row $i/$ny_utm  ($(d+1)/$n_total, $pct%)   \r")
+        end
     end
 end
 println("\nSimulation complete.")
@@ -373,16 +391,16 @@ function animate_variable(data4d, var_label, fname; framerate = 4)
 end
 
 println("Plotting...")
-plot_variable(T_soil0,  "Soil surface temperature (°C)",  "chamonix_july_Tsoil0.png")
+plot_variable(T_air2,   "Air temperature at 2 m (°C)",    "chamonix_july_Tair2m.png")
 plot_variable(T_air1,   "Air temperature at 1 cm (°C)",   "chamonix_july_Tair1cm.png")
-plot_variable(T_soil5,  "Soil temperature at 5 cm (°C)",  "chamonix_july_Tsoil5cm.png")
-plot_variable(T_soil20, "Soil temperature at 20 cm (°C)", "chamonix_july_Tsoil20cm.png")
+plot_variable(T_soil0,  "Soil surface temperature (°C)",  "chamonix_july_Tsoil0.png")
+plot_variable(T_soil10, "Soil temperature at 10 cm (°C)", "chamonix_july_Tsoil10cm.png")
 
 println("Animating...")
-animate_variable(T_soil0,  "Soil surface temperature (°C)",  "chamonix_july_Tsoil0.gif")
+animate_variable(T_air2,   "Air temperature at 2 m (°C)",    "chamonix_july_Tair2m.gif")
 animate_variable(T_air1,   "Air temperature at 1 cm (°C)",   "chamonix_july_Tair1cm.gif")
-animate_variable(T_soil5,  "Soil temperature at 5 cm (°C)",  "chamonix_july_Tsoil5cm.gif")
-animate_variable(T_soil20, "Soil temperature at 20 cm (°C)", "chamonix_july_Tsoil20cm.gif")
+animate_variable(T_soil0,  "Soil surface temperature (°C)",  "chamonix_july_Tsoil0.gif")
+animate_variable(T_soil10, "Soil temperature at 10 cm (°C)", "chamonix_july_Tsoil10cm.gif")
 
 println("\nDone. $(nx_utm)×$(ny_utm) pixel grid, July $year, " *
         "$(nhours) time snapshots ($(join(snapshot_hours, ", ")) h).")
