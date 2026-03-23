@@ -16,6 +16,8 @@ using RasterDataSources
 using NCDatasets       # triggers Rasters NCDatasets extension for NetCDF support
 using Rasters
 using Rasters: X, Y, Ti, Near, Between, lookup
+using Geomorphometry
+using Geomorphometry: Horn
 
 # ---------------------------------------------------------------------------
 # Terrain utilities
@@ -72,7 +74,10 @@ export
     simulate_microclimate,
     # Terrain utilities
     get_utm_crs,
+    load_utm_dem,
+    compute_terrain_grids,
     compute_horizon_angles,
+    ascending_y,
     # FluidProperties vapour pressure methods (not exported by FluidProperties itself)
     VapourPressureEquation,
     GoffGratch,

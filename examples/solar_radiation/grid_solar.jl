@@ -17,9 +17,6 @@
 using BiophysicalGrids
 using RasterDataSources
 using Rasters, ArchGDAL
-using Rasters.Lookups
-using GeoFormatTypes: EPSG
-using Geomorphometry
 using SolarRadiation
 using FluidProperties
 using Unitful
@@ -55,127 +52,24 @@ n_horizon_angles = 24
 # Step 1: Download SRTM tile and crop to study area
 # ============================================================================
 
-println("Downloading SRTM tile covering study area...")
-# getraster returns a matrix of tile paths (one per 5°×5° tile); the area
-# fits within a single tile so we take the first valid path.
-tile_paths  = getraster(SRTM; bounds = (lon_min, lat_min, lon_max, lat_max))
-valid_paths = filter(!ismissing, vec(tile_paths))
-isempty(valid_paths) && error("No SRTM tile found for the requested bounds.")
-dem_full    = Raster(only(valid_paths))
-
-println("Cropping to study area (~100 × 100 pixels)...")
-dem_wgs84 = dem_full[X(Between(lon_min, lon_max)), Y(Between(lat_min, lat_max))]
-
-nx_wgs = size(dem_wgs84, X)
-ny_wgs = size(dem_wgs84, Y)
-println("  Cropped size: $(nx_wgs) × $(ny_wgs) pixels")
-
-# ============================================================================
-# Step 2: Reproject to UTM for metric calculations
-# ============================================================================
-
-println("Reprojecting to UTM...")
-
-utm_crs = get_utm_crs(dem_wgs84)
-utm_dem = Rasters.resample(dem_wgs84; crs = utm_crs, method = :bilinear)
-
-x_coords_utm = collect(lookup(utm_dem, X))
-y_coords_utm = collect(lookup(utm_dem, Y))
-nx_utm       = length(x_coords_utm)
-ny_utm       = length(y_coords_utm)
-cs           = (abs(x_coords_utm[2] - x_coords_utm[1]),
-                abs(y_coords_utm[2] - y_coords_utm[1]))
-
+println("Downloading SRTM DEM and reprojecting to UTM...")
+(; utm_dem, x_coords_utm, y_coords_utm, nx_utm, ny_utm, cs) =
+    load_utm_dem(center_lon, center_lat, extent_lon, extent_lat)
 println("  UTM grid: $(nx_utm) × $(ny_utm) pixels, " *
         "cell size ≈ $(round(cs[1]; digits=1)) × $(round(cs[2]; digits=1)) m")
 
 # ============================================================================
-# Step 3: Slope and aspect via Geomorphometry.jl
+# Steps 2–5: Slope, aspect, lat/lon, horizon angles, unit-tagged rasters
 # ============================================================================
 
-println("Computing slope and aspect...")
+println("Computing terrain grids (slope, aspect, horizons)...")
+(; dem_data, data_is_xy, y_descending,
+   elevation_m, slope_deg, aspect_deg,
+   latitude_deg, longitude_deg, pressure_r,
+   horizons_u) = compute_terrain_grids(utm_dem, x_coords_utm, y_coords_utm;
+                                       n_horizon_angles)
 
-# Rasters may store data in (X,Y) or (Y,X) internal order; detect which.
-dem_data_raw = map(x -> ismissing(x) ? NaN : Float64(x), utm_dem.data)
-data_is_xy   = size(dem_data_raw) == (nx_utm, ny_utm) && ny_utm != nx_utm
-dem_data     = data_is_xy ? permutedims(dem_data_raw) : dem_data_raw  # → (Y, X)
-
-# Geomorphometry needs (X, Y) with Y ascending (south → north).
-dem_for_geomorph = data_is_xy ? dem_data_raw : permutedims(dem_data)
-y_descending     = y_coords_utm[1] > y_coords_utm[end]
-if y_descending
-    dem_for_geomorph = reverse(dem_for_geomorph, dims = 2)
-end
-
-slope_g  = Geomorphometry.slope( dem_for_geomorph; method = Horn(), cellsize = cs)
-aspect_g = Geomorphometry.aspect(dem_for_geomorph; method = Horn(), cellsize = cs)
-
-slope_out  = y_descending ? reverse(slope_g,  dims = 2) : slope_g
-aspect_out = y_descending ? reverse(aspect_g, dims = 2) : aspect_g
-
-# Restore to raster's native dimension order
-if data_is_xy
-    utm_slope  = Raster(slope_out;  dims = dims(utm_dem))
-    utm_aspect = Raster(aspect_out; dims = dims(utm_dem))
-else
-    utm_slope  = Raster(permutedims(slope_out);  dims = dims(utm_dem))
-    utm_aspect = Raster(permutedims(aspect_out); dims = dims(utm_dem))
-end
-
-# ============================================================================
-# Step 4: Build per-pixel lat/lon coordinate arrays
-# ============================================================================
-
-println("Building lat/lon coordinate arrays...")
-
-latlon_dem = Rasters.resample(utm_dem; crs = EPSG(4326))
-lat_range  = lookup(latlon_dem, Y)
-lon_range  = lookup(latlon_dem, X)
-lat_south, lat_north = extrema(lat_range)
-lon_west,  lon_east  = extrema(lon_range)
-
-lats = y_coords_utm[1] < y_coords_utm[end] ?
-    range(lat_south, lat_north; length = ny_utm) :
-    range(lat_north, lat_south; length = ny_utm)
-lons = x_coords_utm[1] < x_coords_utm[end] ?
-    range(lon_west, lon_east; length = nx_utm) :
-    range(lon_east, lon_west; length = nx_utm)
-
-lat_matrix = repeat(collect(lats), 1, nx_utm)   # (ny, nx)
-lon_matrix = repeat(collect(lons)', ny_utm, 1)  # (ny, nx)
-
-if data_is_xy
-    lat_raster = Raster(permutedims(lat_matrix), dims(utm_dem))
-    lon_raster = Raster(permutedims(lon_matrix), dims(utm_dem))
-else
-    lat_raster = Raster(lat_matrix, dims(utm_dem))
-    lon_raster = Raster(lon_matrix, dims(utm_dem))
-end
-
-# ============================================================================
-# Step 5: Horizon angles from the DEM
-# ============================================================================
-
-println("Computing horizon angles ($n_horizon_angles directions)...")
-
-horizons   = compute_horizon_angles(dem_data, x_coords_utm, y_coords_utm, n_horizon_angles)
-horizons_u = horizons .* 1.0u"°"
-
-# ============================================================================
-# Step 6: Prepare unit-tagged rasters
-# ============================================================================
-
-println("Preparing rasters with physical units...")
-
-tag(r, u) = map(x -> (ismissing(x) || isnan(x)) ? missing : x * u, r)
-
-elevation_m   = tag(utm_dem,    1.0u"m")
-slope_deg     = tag(utm_slope,  1.0u"°")
-aspect_deg    = tag(utm_aspect, 1.0u"°")
-latitude_deg  = tag(lat_raster, 1.0u"°")
-longitude_deg = tag(lon_raster, 1.0u"°")
-albedo_r      = map(x -> ismissing(x) ? missing : default_albedo, elevation_m)
-pressure_r    = map(e -> ismissing(e) ? missing : atmospheric_pressure(e), elevation_m)
+albedo_r = map(x -> ismissing(x) ? missing : default_albedo, elevation_m)
 
 solar_model = SolarProblem(; scattered_uv = false)
 
@@ -258,14 +152,14 @@ println("  Daily range: $(round(minimum(valid_d); digits=1)) – " *
 println("Plotting...")
 fmt_h(h) = @sprintf("%02d:%02d", floor(Int, h), round(Int, (h - floor(h)) * 60))
 
-# Plots.heatmap requires y ascending (rasters are typically north-first / descending).
-# slope_out / aspect_out come from Geomorphometry in (nx, ny) order; permute to (ny, nx).
-y_plt = y_coords_utm[1] > y_coords_utm[end] ? reverse(y_coords_utm) : y_coords_utm
-flipy(m) = y_coords_utm[1] > y_coords_utm[end] ? m[end:-1:1, :] : m
+# ascending_y(y, m) flips both y and the (ny,nx) matrix so heatmap gets ascending y.
+# Slope/aspect rasters are unit-tagged; strip units and reorder to (ny, nx) first.
+to_mat(r) = map(x -> ismissing(x) ? NaN : ustrip(x), r)
+to_ny_nx(r) = data_is_xy ? permutedims(to_mat(r)) : to_mat(r)
 
-dem_plt    = flipy(dem_data)
-slope_plt  = flipy(permutedims(slope_out))
-aspect_plt = flipy(permutedims(aspect_out))
+y_plt, dem_plt    = ascending_y(y_coords_utm, dem_data)
+_,     slope_plt  = ascending_y(y_coords_utm, to_ny_nx(slope_deg))
+_,     aspect_plt = ascending_y(y_coords_utm, to_ny_nx(aspect_deg))
 
 common_kw = (; aspect_ratio = :equal, xlabel = "Easting (m)", ylabel = "Northing (m)")
 
@@ -287,10 +181,11 @@ println("  Saved chamonix_terrain.png")
 
 # ── Fig. 2: Horizon angles (4 cardinal directions) ─────────────────────────
 hz_dirs  = [(1, "N 0°"), (7, "E 90°"), (13, "S 180°"), (19, "W 270°")]
+horizons = ustrip.(u"°", horizons_u)  # raw Float64 for plotting
 hz_valid = filter(!isnan, vec(horizons))
 hz_clims = isempty(hz_valid) ? (0.0, 1.0) : extrema(hz_valid)
 
-hz_panels = [heatmap(x_coords_utm, y_plt, flipy(horizons[:, :, d]);
+hz_panels = [heatmap(x_coords_utm, y_plt, ascending_y(y_coords_utm, horizons[:, :, d])[2];
     color = :YlOrRd, title = "Horizon $lbl", clims = hz_clims,
     colorbar_title = "°", common_kw...) for (d, lbl) in hz_dirs]
 
@@ -305,7 +200,7 @@ s_clims   = (0.0, maximum(all_vals))
 panel_idx = round.(Int, range(2, length(hours_vec) - 1; length = 4))
 
 solar_panels = [heatmap(x_coords_utm, y_plt,
-    flipy(Float64.(coalesce.(global_terrain_hours[pi], NaN)));
+    ascending_y(y_coords_utm, Float64.(coalesce.(global_terrain_hours[pi], NaN)))[2];
     color = :inferno, title = "Hour $(fmt_h(hours_vec[pi]))",
     clims = s_clims, colorbar_title = "W/m²", common_kw...)
     for pi in panel_idx]
@@ -316,7 +211,7 @@ savefig("chamonix_solar_panel.png")
 println("  Saved chamonix_solar_panel.png")
 
 # ── Fig. 4: Daily total radiation ──────────────────────────────────────────
-display(heatmap(x_coords_utm, y_plt, flipy(daily_MJ);
+display(heatmap(x_coords_utm, y_plt, ascending_y(y_coords_utm, daily_MJ)[2];
     color = :inferno, colorbar_title = "MJ/m²/day",
     title = "Daily total solar radiation — Day $simulation_day, Chamonix",
     size = (850, 720), left_margin = 6Plots.mm, common_kw...))

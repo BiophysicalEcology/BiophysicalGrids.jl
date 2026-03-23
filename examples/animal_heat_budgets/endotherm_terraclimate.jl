@@ -37,7 +37,7 @@ nsteps = ndays * 24
 println("Obtaining TerraClimate weather (year 2000)...")
 year = 2000
 weather          = get_weather(TerraClimate, lon, lat; ystart = year, elevation)
-weather_scenario = apply_climate_scenario(TerraClimate{Historical}, ystart = year, weather, lon, lat)
+weather_scenario = apply_climate_scenario(Historical, weather, lon, lat)
 
 # ── Step 2: Terrain and soil ──────────────────────────────────────────────
 solar_terrain = SolarTerrain(;
