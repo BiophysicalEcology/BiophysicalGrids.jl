@@ -81,6 +81,7 @@ export
     get_utm_crs,
     load_utm_dem,
     compute_terrain_grids,
+    compute_horizon_angles,
     ascending_y,
     # FluidProperties vapour pressure methods (not exported by FluidProperties itself)
     VapourPressureEquation,

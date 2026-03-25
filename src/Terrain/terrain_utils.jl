@@ -1,8 +1,9 @@
 # Terrain utility functions for biophysical grid analyses.
 #
 # These functions bridge gridded DEM rasters and the SolarRadiation.jl /
-# Geomorphometry.jl APIs.  Horizon angles are computed via
-# Geomorphometry.horizon_angle (KernelAbstractions-based sweep algorithm).
+# Geomorphometry.jl APIs.  The horizon-angle algorithm here is a temporary
+# placeholder: once Geomorphometry.jl adds its own horizon routine it will
+# be preferred and this function removed.
 
 
 """
@@ -61,7 +62,7 @@ function load_utm_dem(center_lon, center_lat, extent_lon, extent_lat)
 end
 
 """
-    compute_terrain_grids(utm_dem, x_coords_utm, y_coords_utm; n_horizon_angles=32)
+    compute_terrain_grids(utm_dem, x_coords_utm, y_coords_utm; n_horizon_angles=24)
         -> NamedTuple
 
 Compute the full set of per-pixel terrain grids needed for solar radiation and
@@ -83,7 +84,7 @@ NamedTuple with fields:
 - `horizons_u`    : `(ny, nx, n_dirs)` horizon-angle array with `u"°"` units
 """
 function compute_terrain_grids(utm_dem, x_coords_utm, y_coords_utm;
-                               n_horizon_angles = 32)
+                               n_horizon_angles = 24)
     nx_utm = length(x_coords_utm)
     ny_utm = length(y_coords_utm)
     cs     = (abs(x_coords_utm[2] - x_coords_utm[1]),
@@ -138,16 +139,10 @@ function compute_terrain_grids(utm_dem, x_coords_utm, y_coords_utm;
         lon_raster = Raster(lon_matrix, dims(utm_dem))
     end
 
-    # ---- Horizon angles (Geomorphometry.jl) -----------------------------
-    # dem_for_geomorph is (nx, ny) with Y ascending — same layout required by
-    # slope/aspect above.  horizon_angle returns (nx, ny, n_dirs); undo the Y
-    # flip if applied, then permute to (ny, nx, n_dirs) to match the pipeline.
-    horizons_g = Geomorphometry.horizon_angle(dem_for_geomorph;
-                     directions = n_horizon_angles, cellsize = cs)
-    if y_descending
-        horizons_g = reverse(horizons_g, dims = 2)
-    end
-    horizons_u = permutedims(horizons_g, (2, 1, 3)) .* 1.0u"°"
+    # ---- Horizon angles -------------------------------------------------
+    horizons   = compute_horizon_angles(dem_data, x_coords_utm, y_coords_utm,
+                                        n_horizon_angles)
+    horizons_u = horizons .* 1.0u"°"
 
     # ---- Unit-tagged rasters --------------------------------------------
     tag(r, u) = map(x -> (ismissing(x) || isnan(x)) ? missing : x * u, r)
@@ -179,3 +174,65 @@ function ascending_y(y_coords, data)
     end
 end
 
+"""
+    compute_horizon_angles(dem, x_coords, y_coords, n_dirs; verbose=true)
+        -> Array{Float64,3}
+
+Compute the terrain horizon elevation angle (degrees above horizontal) for
+`n_dirs` evenly-spaced azimuth directions.
+
+# Arguments
+- `dem`       : `(ny, nx)` matrix of elevations in consistent linear units
+                (usually metres after UTM reprojection).  `NaN` for no-data.
+- `x_coords`  : x-axis coordinate vector of length `nx` (easting in metres).
+- `y_coords`  : y-axis coordinate vector of length `ny` (northing in metres).
+- `n_dirs`    : number of azimuth directions (e.g. 24 for 15° steps).
+
+# Returns
+`Array{Float64,3}` of size `(ny, nx, n_dirs)` with horizon elevation angles
+in degrees.  `NaN` where `dem` is `NaN`.
+"""
+function compute_horizon_angles(dem, x_coords, y_coords, n_dirs; verbose = true)
+    ny, nx   = size(dem)
+    horizons = zeros(Float64, ny, nx, n_dirs)
+    dx       = Float64(x_coords[2] - x_coords[1])
+    dy       = Float64(y_coords[2] - y_coords[1])
+
+    for d in 1:n_dirs
+        az      = 2π * (d - 1) / n_dirs
+        raw_dj  = sin(az) / abs(dx)
+        raw_di  = cos(az) / dy
+        mc      = max(abs(raw_di), abs(raw_dj))
+        mc ≈ 0  && continue
+        step_di = raw_di / mc
+        step_dj = raw_dj / mc
+
+        verbose && print("  horizon direction $d/$n_dirs  \r")
+        for j in 1:nx, i in 1:ny
+            if isnan(dem[i, j])
+                horizons[i, j, d] = NaN
+                continue
+            end
+            elev0   = dem[i, j]
+            max_tan = 0.0
+            k       = 1
+            while true
+                ri = round(Int, i + k * step_di)
+                rj = round(Int, j + k * step_dj)
+                (ri < 1 || ri > ny || rj < 1 || rj > nx) && break
+                if !isnan(dem[ri, rj])
+                    dist = sqrt((x_coords[rj] - x_coords[j])^2 +
+                                (y_coords[ri] - y_coords[i])^2)
+                    if dist > 0
+                        t = (dem[ri, rj] - elev0) / dist
+                        t > max_tan && (max_tan = t)
+                    end
+                end
+                k += 1
+            end
+            horizons[i, j, d] = atand(max_tan)
+        end
+    end
+    verbose && println()
+    return horizons
+end

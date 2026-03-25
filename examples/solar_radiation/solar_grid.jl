@@ -46,7 +46,7 @@ simulation_day   = 172               # 21 June — summer solstice
 hour_step        = 1.0
 hours_of_day     = 6.0:hour_step:20.0
 default_albedo   = 0.2
-n_horizon_angles = 32
+n_horizon_angles = 24
 
 # ============================================================================
 # Step 1: Download SRTM tile and crop to study area
