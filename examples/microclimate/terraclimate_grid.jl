@@ -52,7 +52,7 @@ lat_max = center_lat + extent_lat / 2
 
 year             = 2000
 july             = 7          # month index
-n_horizon_angles = 24
+n_horizon_angles = 32
 
 depths  = [0.0, 2.5, 5.0, 10.0, 15.0, 20.0, 30.0, 50.0, 100.0, 200.0]u"cm"
 heights = [0.01, 2.0]u"m"
