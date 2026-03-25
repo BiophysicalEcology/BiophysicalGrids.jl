@@ -84,7 +84,7 @@ function simulate_microclimate(
     organic_soil_cap::Bool = false,
     solar_model::SolarProblem = SolarProblem(),
     iterate_day::Int = 10,
-    convergence_tolerance = 0.1u"K",
+    convergence_tolerance = 0.1u"K", # TODO wrap these things into settings object
     spinup::Bool = false,
     initial_soil_temperature = nothing,
     initial_soil_moisture = fill(0.42 * 0.25, length(depths)),
@@ -93,8 +93,10 @@ function simulate_microclimate(
     (; environment_minmax, environment_daily, environment_hourly, latitude, days) = weather
 
     if clearsky
-        n = length(environment_minmax.cloud_min)
-        environment_minmax = MonthlyMinMaxEnvironment(;
+        n    = length(environment_minmax.cloud_min)
+        ctor = environment_minmax isa DailyMinMaxEnvironment ? DailyMinMaxEnvironment :
+                                                               MonthlyMinMaxEnvironment
+        environment_minmax = ctor(;
             reference_temperature_min = environment_minmax.reference_temperature_min,
             reference_temperature_max = environment_minmax.reference_temperature_max,
             reference_wind_min        = environment_minmax.reference_wind_min,
@@ -107,6 +109,10 @@ function simulate_microclimate(
             maxima_times              = environment_minmax.maxima_times,
         )
     end
+
+    # Daily-mode: consecutive real days → inherit state, iterate once
+    is_daily     = environment_minmax isa DailyMinMaxEnvironment
+    _iterate_day = is_daily ? 1 : iterate_day
 
     # Build (ndepths × ndays) precomputed soil moisture matrix from monthly weather data.
     # Used by Microclimate.jl when runmoist=false to vary soil moisture per day.
@@ -166,8 +172,9 @@ function simulate_microclimate(
         environment_minmax,
         environment_daily,
         environment_hourly,
-        iterate_day,
+        iterate_day     = _iterate_day,
         convergence_tolerance,
+        daily           = is_daily,
         runmoist,
         spinup,
         initial_soil_temperature,

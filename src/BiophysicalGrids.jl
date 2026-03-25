@@ -13,7 +13,9 @@ using FluidProperties: GoffGratch, Teten, Huang, VapourPressureEquation
 
 using GeoFormatTypes
 using RasterDataSources
+using RasterDataSources: layername
 using NCDatasets       # triggers Rasters NCDatasets extension for NetCDF support
+using Zarr
 using Rasters
 using Rasters: X, Y, Ti, Near, Between, lookup
 using Geomorphometry
@@ -34,6 +36,7 @@ include("Mesoclimate/Mesoclimate.jl")
 # ---------------------------------------------------------------------------
 include("WeatherDataSources/common.jl")
 include("WeatherDataSources/TerraClimate.jl")
+include("WeatherDataSources/ERA5.jl")
 include("WeatherDataSources/climate_scenarios.jl")
 
 # ---------------------------------------------------------------------------
@@ -56,11 +59,12 @@ export
     cloud_from_srad,
     # Wind
     wind_profile_adjust,
-    # TerraClimate data source types (re-exported from RasterDataSources)
+    # Data source types (re-exported from RasterDataSources)
     TerraClimate,
     Historical,
     Plus2C,
     Plus4C,
+    ERA5,
     # Weather data
     get_weather,
     apply_climate_scenario,
@@ -69,6 +73,7 @@ export
     CampbelldeVriesSoilThermal,
     DailyTimeseries,
     MonthlyMinMaxEnvironment,
+    DailyMinMaxEnvironment,
     HourlyTimeseries,
     # Simulation
     simulate_microclimate,

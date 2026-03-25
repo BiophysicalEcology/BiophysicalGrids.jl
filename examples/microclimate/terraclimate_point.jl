@@ -34,8 +34,8 @@ elevation = 270.0u"m"
 # The lapse rate correction adjusts TerraClimate grid-cell temperatures
 # to the site elevation. grid_elevation defaults to 0 m (sea level) when
 # not supplied — provide it for better accuracy.
-weather = get_weather(TerraClimate, lon, lat;
-    ystart = 2000,
+weather = get_weather(TerraClimate, lon, lat;  #TODO make it for a point (geointerface-compatible)
+    ystart = 2000, #TODO use real datetimes
     elevation,
     # grid_elevation defaults to elevation (no lapse correction).
     # Provide the WorldClim 2.5-arcmin grid elevation at this cell for lapse correction,
@@ -53,9 +53,9 @@ solar_terrain = SolarTerrain(;
     aspect            = 0.0u"°",
     horizon_angles    = fill(0.0u"°", 24),
     albedo            = 0.15,
-    atmospheric_pressure = atmospheric_pressure(elevation),
-    latitude          = lat * u"°",
-    longitude         = lon * u"°",
+    atmospheric_pressure = atmospheric_pressure(elevation), # TODO delete?
+    latitude          = lat * u"°", # TODO make point
+    longitude         = lon * u"°", # TODO make point
 )
 
 micro_terrain = MicroTerrain(;
@@ -104,7 +104,9 @@ result = simulate_microclimate(
     heights                  = [0.01, 2.0]u"m",
     runmoist                 = false,
     clearsky                 = false,
-    organic_soil_cap         = true,
+    organic_soil_cap         = true, # TODO rename 'cap', crust?
+    iterate_day              = 3,
+    convergence_tolerance    = nothing, # TODO wrap these things into settings object
     vapour_pressure_equation = GoffGratch(),
 )
 

@@ -20,11 +20,12 @@ SolarRadiation = "d01e3663-6acb-4162-92ee-c50acb918cac"
 Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
 UnitfulMoles = "999f2bd7-36bf-5ba7-9bc1-c9473aa75374"
+Zarr = "0a941bbe-ad1d-11e8-39d9-ab76183a1d99"
 
 [sources]
 BiophysicalBehaviour = {rev = "main", url = "https://github.com/BiophysicalEcology/BiophysicalBehaviour.jl"}
-FluidProperties = {rev = "main", url = "https://github.com/BiophysicalEcology/FluidProperties.jl"}
-Microclimate = {rev = "main", url = "https://github.com/BiophysicalEcology/Microclimate.jl"}
+#FluidProperties = {rev = "main", url = "https://github.com/BiophysicalEcology/FluidProperties.jl"}
+#Microclimate = {rev = "main", url = "https://github.com/BiophysicalEcology/Microclimate.jl"}
 SolarRadiation = {rev = "main", url = "https://github.com/BiophysicalEcology/SolarRadiation.jl"}
 
 [compat]
@@ -49,6 +50,7 @@ Tables = "1"
 Test = "1"
 Unitful = "1"
 UnitfulMoles = "0.1"
+Zarr = "0.9"
 julia = "1"
 
 [extras]

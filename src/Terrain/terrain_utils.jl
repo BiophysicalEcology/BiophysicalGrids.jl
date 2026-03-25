@@ -1,9 +1,8 @@
 # Terrain utility functions for biophysical grid analyses.
 #
 # These functions bridge gridded DEM rasters and the SolarRadiation.jl /
-# Geomorphometry.jl APIs.  The horizon-angle algorithm here is a temporary
-# placeholder: once Geomorphometry.jl adds its own horizon routine it will
-# be preferred and this function removed.
+# Geomorphometry.jl APIs.  Horizon angles are computed via
+# Geomorphometry.horizon_angle (KernelAbstractions-based sweep algorithm).
 
 
 """
@@ -62,7 +61,7 @@ function load_utm_dem(center_lon, center_lat, extent_lon, extent_lat)
 end
 
 """
-    compute_terrain_grids(utm_dem, x_coords_utm, y_coords_utm; n_horizon_angles=24)
+    compute_terrain_grids(utm_dem, x_coords_utm, y_coords_utm; n_horizon_angles=32)
         -> NamedTuple
 
 Compute the full set of per-pixel terrain grids needed for solar radiation and
@@ -84,7 +83,7 @@ NamedTuple with fields:
 - `horizons_u`    : `(ny, nx, n_dirs)` horizon-angle array with `u"°"` units
 """
 function compute_terrain_grids(utm_dem, x_coords_utm, y_coords_utm;
-                               n_horizon_angles = 24)
+                               n_horizon_angles = 32)
     nx_utm = length(x_coords_utm)
     ny_utm = length(y_coords_utm)
     cs     = (abs(x_coords_utm[2] - x_coords_utm[1]),
@@ -139,10 +138,16 @@ function compute_terrain_grids(utm_dem, x_coords_utm, y_coords_utm;
         lon_raster = Raster(lon_matrix, dims(utm_dem))
     end
 
-    # ---- Horizon angles -------------------------------------------------
-    horizons   = compute_horizon_angles(dem_data, x_coords_utm, y_coords_utm,
-                                        n_horizon_angles)
-    horizons_u = horizons .* 1.0u"°"
+    # ---- Horizon angles (Geomorphometry.jl) -----------------------------
+    # dem_for_geomorph is (nx, ny) with Y ascending — same layout required by
+    # slope/aspect above.  horizon_angle returns (nx, ny, n_dirs); undo the Y
+    # flip if applied, then permute to (ny, nx, n_dirs) to match the pipeline.
+    horizons_g = Geomorphometry.horizon_angle(dem_for_geomorph;
+                     directions = n_horizon_angles, cellsize = cs)
+    if y_descending
+        horizons_g = reverse(horizons_g, dims = 2)
+    end
+    horizons_u = permutedims(horizons_g, (2, 1, 3)) .* 1.0u"°"
 
     # ---- Unit-tagged rasters --------------------------------------------
     tag(r, u) = map(x -> (ismissing(x) || isnan(x)) ? missing : x * u, r)
