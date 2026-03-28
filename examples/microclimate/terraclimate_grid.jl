@@ -24,6 +24,7 @@
 #   using Pkg; Pkg.add(["ArchGDAL", "Plots"])
 
 using BiophysicalGrids
+using Dates
 using RasterDataSources
 using Rasters, ArchGDAL
 using SolarRadiation
@@ -106,7 +107,7 @@ valid_elev    = filter(!isnan, vec(dem_data))
 center_elev_u = median(valid_elev) * u"m"
 
 weather = get_weather(TerraClimate, center_lon, center_lat;
-    ystart    = year,
+    tstart    = Date(year),
     elevation = center_elev_u,
 )
 

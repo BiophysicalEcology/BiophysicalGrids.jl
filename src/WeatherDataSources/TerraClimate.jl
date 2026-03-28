@@ -1,5 +1,5 @@
 """
-    get_weather(TerraClimate, lon, lat; ystart, yfinish, kwargs...)
+    get_weather(TerraClimate, lon, lat; tstart, tend, kwargs...)
     get_weather(TerraClimate{Plus2C}, lon, lat; ...)
     get_weather(TerraClimate{Plus4C}, lon, lat; ...)
 
@@ -13,7 +13,8 @@ pressure deficit), `srad` (shortwave radiation), `ppt` (precipitation).
 
 # Arguments
 - `lon`, `lat`: decimal degrees (longitude, latitude)
-- `ystart`, `yfinish`: simulation years (inclusive). Default `yfinish = ystart`.
+- `tstart`, `tend`: simulation period as `Date` values (year is used; month/day ignored).
+  Default `tend = tstart` (single year).
 
 # Keyword arguments
 - `elevation`: site elevation as a Unitful quantity (e.g. `270.0u"m"`). If provided,
@@ -41,7 +42,7 @@ pressure deficit), `srad` (shortwave radiation), `ppt` (precipitation).
 # Example
 ```julia
 weather = get_weather(TerraClimate, -89.4557, 43.1379;
-    ystart = 2000, yfinish = 2001,
+    tstart = Date(2000), tend = Date(2001),
     elevation = 270.0u"m",
     vapour_pressure_method = GoffGratch(),
     lapse_rate_type = EnvironmentalLapseRate(),
@@ -52,16 +53,16 @@ function get_weather(
     ::Type{<:TerraClimate},
     lon::Real,
     lat::Real;
-    ystart::Int,
-    yfinish::Int = ystart,
+    tstart::Date,
+    tend::Date = tstart,
     scenario::Type{<:RasterDataSources.WarmingScenario} = Historical,
     elevation = nothing,
     grid_elevation = nothing,
     lapse_rate_type::LapseRate = EnvironmentalLapseRate(),
     vapour_pressure_method = GoffGratch(),
 )
-    nyears = yfinish - ystart + 1
-    years  = ystart:yfinish
+    nyears = year(tend) - year(tstart) + 1
+    years  = year(tstart):year(tend)
 
     layers = (:tmax, :tmin, :ws, :vap, :vpd, :srad, :ppt, :soil)
 

@@ -12,6 +12,7 @@
 #   using Pkg; Pkg.add(url="https://github.com/BiophysicalEcology/BiophysicalBehaviour.jl")
 
 using BiophysicalGrids
+using Dates
 using BiophysicalBehaviour
 using HeatExchange
 using BiophysicalGeometry
@@ -41,7 +42,7 @@ heights = [1.0, 50.0, 100.0]u"cm"    # ground node + two climbing heights
 # ── Step 1: TerraClimate weather ──────────────────────────────────────────
 println("Obtaining TerraClimate weather (year 2000)...")
 year = 2000
-weather          = get_weather(TerraClimate, lon, lat; ystart = year, elevation)
+weather          = get_weather(TerraClimate, lon, lat; tstart = Date(year), elevation)
 weather_scenario = apply_climate_scenario(Historical, weather, lon, lat)
 
 # ── Step 2: Terrain and soil ──────────────────────────────────────────────

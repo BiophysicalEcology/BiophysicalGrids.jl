@@ -24,6 +24,7 @@ using Microclimate
 using SolarRadiation
 using FluidProperties
 using Unitful
+using Dates
 
 lon, lat = -89.4557, 43.1379
 elevation = 270.0u"m"
@@ -35,7 +36,7 @@ elevation = 270.0u"m"
 # to the site elevation. grid_elevation defaults to 0 m (sea level) when
 # not supplied — provide it for better accuracy.
 weather = get_weather(TerraClimate, lon, lat;  #TODO make it for a point (geointerface-compatible)
-    ystart = 2000, #TODO use real datetimes
+    tstart = Date(2000),
     elevation,
     # grid_elevation defaults to elevation (no lapse correction).
     # Provide the WorldClim 2.5-arcmin grid elevation at this cell for lapse correction,
@@ -89,8 +90,8 @@ soil_thermal_model = CampbelldeVriesSoilThermal(;
 # weather download (Step 1) is always from the historical record; the scenario
 # only modifies the environment structs passed to simulate_microclimate.
 weather_scenario = apply_climate_scenario(Historical, weather, lon, lat)
-# weather_scenario = apply_climate_scenario(TerraClimate{Plus2C}, weather, lon, lat; ystart = 2000)
-# weather_scenario = apply_climate_scenario(TerraClimate{Plus4C}, weather, lon, lat; ystart = 2000)
+# weather_scenario = apply_climate_scenario(TerraClimate{Plus2C}, weather, lon, lat; tstart = Date(2000))
+# weather_scenario = apply_climate_scenario(TerraClimate{Plus4C}, weather, lon, lat; tstart = Date(2000))
 
 # ---------------------------------------------------------------------------
 # Step 5: simulate
@@ -129,7 +130,7 @@ air_T  = [p.air_temperature for p in result.profile]  # per-height air temp
 # # ---------------------------------------------------------------------------
 # vp = Huang()   # faster than GoffGratch(); also try Teten() for maximum speed
 # weather_huang = get_weather(TerraClimate, lon, lat;
-#     ystart = 2000,
+#     tstart = Date(2000),
 #     elevation,
 #     vapour_pressure_method = vp,
 # )
@@ -151,7 +152,7 @@ air_T  = [p.air_temperature for p in result.profile]  # per-height air temp
 # # Sensitivity: dry adiabatic lapse rate
 # # ---------------------------------------------------------------------------
 # weather_dry = get_weather(TerraClimate, lon, lat;
-#     ystart = 2000,
+#     tstart = Date(2000),
 #     elevation,
 #     lapse_rate_type        = DryAdiabaticLapseRate(),
 #     vapour_pressure_method = GoffGratch(),
@@ -170,7 +171,7 @@ air_T  = [p.air_temperature for p in result.profile]  # per-height air temp
 # # Multi-year run (2000–2002)
 # # ---------------------------------------------------------------------------
 # weather_3yr = get_weather(TerraClimate, lon, lat;
-#     ystart = 2000, yfinish = 2002,
+#     tstart = Date(2000), tend = Date(2002),
 #     elevation,
 #     vapour_pressure_method = GoffGratch(),
 # )
