@@ -71,7 +71,8 @@ println("Computing terrain grids (slope, aspect, horizons)...")
 
 albedo_r = map(x -> ismissing(x) ? missing : default_albedo, elevation_m)
 
-solar_model = SolarProblem(; scattered_uv = false)
+aerosol_optical_depth = get_aerosol_optical_depth(center_lat, center_lon, 0.01, 6)
+solar_model = SolarProblem(; scattered_uv = false, aerosol_optical_depth)
 
 # ============================================================================
 # Step 7: Compute solar radiation for each hour

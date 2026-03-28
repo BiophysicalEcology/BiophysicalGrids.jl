@@ -95,11 +95,16 @@ weather_scenario = apply_climate_scenario(Historical, weather, lon, lat)
 # ---------------------------------------------------------------------------
 # Step 5: simulate
 # ---------------------------------------------------------------------------
+aerosol_optical_depth = get_aerosol_optical_depth(lat, lon, 0.01, 6)
+solar_model = SolarProblem(; aerosol_optical_depth)
+# TODO Zenodo URL for gads.nc as an artifact in Artifacts.toml
+
 result = simulate_microclimate(
     solar_terrain,
     micro_terrain,
     soil_thermal_model,
     weather_scenario;
+    solar_model,
     depths                   = [0, 2.5, 5, 10, 15, 20, 30, 50, 100, 200]u"cm",
     heights                  = [0.01, 2.0]u"m",
     runmoist                 = false,
@@ -200,10 +205,12 @@ let
     soiltemps_nmr = Matrix(soil[:,   ["D0cm","D2.5cm","D5cm","D10cm","D15cm","D20cm","D30cm","D50cm","D100cm","D200cm"]])
     ta1cm_nmr  = (metout.TALOC .+ 273.15) .* 1u"K"
     ta2m_nmr   = (metout.TAREF .+ 273.15) .* 1u"K"
+    tsky_nmr   = (metout.TSKYC .+ 273.15) .* 1u"K"
     rh1cm_nmr  =  metout.RHLOC ./ 100.0
     rh2m_nmr   =  metout.RH    ./ 100.0
     vel1cm_nmr =  metout.VLOC  .* 1u"m/s"
     vel2m_nmr  =  metout.VREF  .* 1u"m/s"
+    solar_nmr   = metout.SOLR .* 1u"W/m^2"
 
     # ---- Julia output matrices (ntimesteps × nheights) ----------------------
     air_temperature_matrix = hcat([p.air_temperature for p in result.profile]...)'
@@ -212,6 +219,30 @@ let
 
     depths_labels = ["$(round(ustrip(u"cm", d); digits=1)) cm"
                      for d in [0, 2.5, 5, 10, 15, 20, 30, 50, 100, 200]u"cm"]
+
+    # ---- Solar radiation and sky temperature--------------------------------------------------
+
+    global_radiation       = result.global_radiation
+    sky_temperature       = result.sky_temperature
+
+    tsky_ylim   = (min(minimum(sky_temperature), minimum(tsky_nmr)) - 1u"K",
+            max(maximum(sky_temperature), maximum(tsky_nmr)) + 1.0u"K")
+    rad_ylim   = (0.0u"W/m^2", 800.0u"W/m^2")
+
+
+    p_rad = plot(layout=(1, 1), size=(900, 800), legend=:outertop)
+      plot!(p_rad, t, sky_temperature;
+            label="Julia",     color=:red,   ylims=tsky_ylim)
+      plot!(p_rad, t, tsky_nmr;
+            label="NicheMapR", color=:black)
+    display(p_rad)
+
+    p_rad = plot(layout=(1, 1), size=(900, 800), legend=:outertop)
+      plot!(p_rad, t, global_radiation;
+            label="Julia",     color=:red,   ylims=rad_ylim)
+      plot!(p_rad, t, solar_nmr;
+            label="NicheMapR", color=:black)
+    display(p_rad)
 
     # ---- Soil temperatures --------------------------------------------------
     soil0_julia = ustrip.(u"°C", u"K".(result.soil_temperature[t, 1]))

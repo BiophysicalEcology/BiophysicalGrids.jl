@@ -14,12 +14,18 @@ using FluidProperties: GoffGratch, Teten, Huang, VapourPressureEquation
 using GeoFormatTypes
 using RasterDataSources
 using RasterDataSources: layername
+using DimensionalData: DimArray, Dim, At, dims
 using NCDatasets       # triggers Rasters NCDatasets extension for NetCDF support
 using Zarr
 using Rasters
 using Rasters: X, Y, Ti, Near, Between, lookup
 using Geomorphometry
 using Geomorphometry: Horn
+
+# ---------------------------------------------------------------------------
+# Atmosphere
+# ---------------------------------------------------------------------------
+include("Atmosphere/aerosol.jl")
 
 # ---------------------------------------------------------------------------
 # Terrain utilities
@@ -77,6 +83,8 @@ export
     HourlyTimeseries,
     # Simulation
     simulate_microclimate,
+    # Aerosol
+    get_aerosol_optical_depth,
     # Terrain utilities
     get_utm_crs,
     load_utm_dem,

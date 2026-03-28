@@ -92,7 +92,11 @@ function with_shade(w, shade_frac)
     merge(w, (; environment_daily = new_ed))
 end
 
+aerosol_optical_depth = get_aerosol_optical_depth(lat, lon, 0.01, 6)
+solar_model = SolarProblem(; aerosol_optical_depth)
+
 common_micro_kwargs = (;
+    solar_model,
     depths,
     heights,
     runmoist         = false,

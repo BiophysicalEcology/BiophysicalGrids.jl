@@ -181,7 +181,8 @@ soil_thermal_model = CampbelldeVriesSoilThermal(;
     return_flow_threshold = 0.162,
 )
 
-solar_model = SolarProblem()
+aerosol_optical_depth = get_aerosol_optical_depth(center_lat, center_lon, 0.01, july)
+solar_model = SolarProblem(; aerosol_optical_depth)
 
 # Lapse-correct temperature and humidity for a given elevation difference (Δz = pixel − center).
 # Humidity is adjusted by conserving actual vapour pressure (dry adiabatic approximation)

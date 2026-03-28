@@ -87,12 +87,16 @@ soil_thermal_model = CampbelldeVriesSoilThermal(;
 # DailyMinMaxEnvironment — no need to specify it explicitly.
 # Pass hourly_rainfall=true to use sub-daily (hourly) rainfall for soil
 # moisture calculations instead of the daily totals.
+aerosol_optical_depth = get_aerosol_optical_depth(lat, lon, 0.01, 6)
+solar_model = SolarProblem(; aerosol_optical_depth)
+
 println("Running microclimate simulation...")
 result = simulate_microclimate(
     solar_terrain,
     micro_terrain,
     soil_thermal_model,
     weather;
+    solar_model,
     depths                   = [0, 2.5, 5, 10, 15, 20, 30, 50, 100, 200]u"cm",
     heights                  = [0.01, 2.0]u"m",
     runmoist                 = false,
