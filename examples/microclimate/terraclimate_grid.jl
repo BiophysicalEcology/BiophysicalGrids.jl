@@ -4,16 +4,15 @@
 #   1. Download SRTM DEM (~100×100 pixels) and reproject to UTM
 #   2. Compute slope, aspect, horizon angles (Geomorphometry.jl)
 #   3. Download TerraClimate weather (year 2000) at center pixel; slice to July
-#   4. Per-pixel simulate_microclimate with lapse-rate-corrected weather
-#   5. Plot soil surface T, air T at 1 cm, soil T at 5 cm, soil T at 20 cm
+#   4. Build lapse-corrected weather grid; run simulate_microclimate_grid
+#      (RowWarmStart init strategy, rows sequential, columns parallelised)
+#   5. Plot soil surface T, air T at 1 cm, soil T at 10 cm
 #      at 6 times of day: midnight, dawn, mid-morning, midday, mid-afternoon, dusk
 #
-# Each pixel runs a single July representative day (24 hours) with up to iterate_day=10
-# passes (the default), stopping early when the maximum nodal temperature change is
-# below convergence_tolerance=0.1 K, so near-surface soil temperatures converge.
-# Rows are processed sequentially; each pixel is warm-started from the converged
-# midnight soil-temperature profile of the pixel directly above it, reducing the
-# iterations needed to converge.  Columns within each row are parallelised.
+# Each pixel runs a single July representative day (24 hours) with up to iterate_day=5
+# passes, stopping early when the maximum nodal temperature change is below the
+# convergence tolerance.  The RowWarmStart strategy seeds each pixel from the
+# converged midnight soil-temperature profile of the pixel directly above it.
 # The deep soil boundary condition is the annual mean temperature at each pixel
 # (lapse-corrected from center elevation), computed from the full TerraClimate
 # annual record.
@@ -86,10 +85,11 @@ println("  UTM grid: $(nx_utm) × $(ny_utm) pixels, " *
         "cell size ≈ $(round(cs[1]; digits=1)) × $(round(cs[2]; digits=1)) m")
 
 println("Computing terrain grids (slope, aspect, horizons)...")
+terrain_grids = compute_terrain_grids(utm_dem; n_horizon_angles)
 (; dem_data, data_is_xy, y_descending,
    elevation_m, slope_deg, aspect_deg,
    latitude_deg, longitude_deg, pressure_r,
-   horizons_u) = compute_terrain_grids(utm_dem; n_horizon_angles)
+   horizons_u) = terrain_grids
 
 # ============================================================================
 # Step 7: TerraClimate weather — full year at center pixel, slice to July
@@ -221,122 +221,36 @@ end
 # Step 9: Per-pixel microclimate simulation
 # ============================================================================
 
-println("Running per-pixel microclimate ($(nx_utm) × $(ny_utm) pixels, " *
-        "$(Threads.nthreads()) thread(s))...")
-
-# ---- Precompute per-pixel lapse-corrected weather and T_init values (single-threaded).
-# Doing this outside the threaded loop keeps struct allocation and unit arithmetic
-# out of the hot path, reducing GC pressure during the parallel simulation.
-wp_grid     = Array{Any}(undef, ny_utm, nx_utm)   # lapse-corrected weather per pixel
-Tmean_grid  = fill(NaN * u"K", ny_utm, nx_utm)    # July mean air temperature
-Tdeep_grid  = fill(NaN * u"K", ny_utm, nx_utm)    # deep soil temperature
-
+# Build the lapse-corrected weather grid (single-threaded; struct allocation
+# and unit arithmetic kept out of the parallel hot path to reduce GC pressure).
+wp_grid = Matrix{Any}(undef, ny_utm, nx_utm)
+fill!(wp_grid, nothing)
 for I in CartesianIndices((ny_utm, nx_utm))
     i, j   = I[1], I[2]
     ri, rj = data_is_xy ? (j, i) : (i, j)
     elev   = elevation_m[ri, rj]
     ismissing(elev) && continue
-    wp = lapse_correct_weather(weather_july, elev - center_elev_u)
-    wp_grid[i, j]    = wp
-    Tmean_grid[i, j] = (wp.environment_minmax.reference_temperature_min[1] +
-                        wp.environment_minmax.reference_temperature_max[1]) / 2
-    Tdeep_grid[i, j] = wp.environment_daily.deep_soil_temperature[1]
+    wp_grid[i, j] = lapse_correct_weather(weather_july, elev - center_elev_u)
 end
 
-# Output arrays (ny, nx, nhours) — temperatures extracted in-loop; MicroResult discarded
-T_soil0  = fill(NaN, ny_utm, nx_utm, nhours)  # soil surface (depth idx 1)
-T_air1   = fill(NaN, ny_utm, nx_utm, nhours)  # air at 1 cm  (height idx 2)
-T_air2   = fill(NaN, ny_utm, nx_utm, nhours)  # air at 2 m   (height idx 1, reference)
-T_soil10 = fill(NaN, ny_utm, nx_utm, nhours)  # soil at 10 cm (depth idx 4)
+grid_result = simulate_microclimate_grid(
+    terrain_grids, wp_grid, soil_thermal_model, solar_model;
+    init_strategy            = RowWarmStart(),
+    snapshot_steps,
+    depths, heights,
+    depth_indices            = [1, 4],     # surface (0 cm) and 10 cm
+    height_indices           = [1, 2],     # 1 cm and 2 m
+    albedo                   = 0.15,
+    roughness_height         = 0.004u"m",
+    vapour_pressure_equation = vp_method,
+    iterate_day              = 5,
+)
 
-n_total = nx_utm * ny_utm
-n_done  = Threads.Atomic{Int}(0)
-
-# Spatial warm-start: store the converged midnight soil-temperature profile for
-# each completed pixel so the row below can use it as initial_soil_temperature.
-# Rows are processed sequentially; columns within each row run in parallel.
-# The first row uses an elevation-based estimate; subsequent rows use the
-# converged profile from the pixel directly above (same column), which has
-# similar elevation and hence a similar diurnal temperature regime.
-T_converged = fill!(Matrix{Any}(undef, ny_utm, nx_utm), nothing)
-
-@time for i in 1:ny_utm
-    Threads.@threads :static for j in 1:nx_utm
-        ri, rj = data_is_xy ? (j, i) : (i, j)
-
-        elev = elevation_m[ri, rj]
-        lat  = latitude_deg[ri, rj]
-        lon  = longitude_deg[ri, rj]
-        slp  = slope_deg[ri,    rj]
-        asp  = aspect_deg[ri,   rj]
-        pres = pressure_r[ri,   rj]
-
-        if ismissing(elev) || ismissing(lat) || ismissing(lon) ||
-           ismissing(slp)  || ismissing(asp) || ismissing(pres)
-            continue
-        end
-
-        wp         = wp_grid[i, j]
-        Tmean_july = Tmean_grid[i, j]
-        Tdeep      = Tdeep_grid[i, j]
-
-        # Warm-start from converged midnight profile of pixel above (if available).
-        # Falls back to elevation-based estimate for the first row or missing neighbors.
-        T_init = if i > 1 && !isnothing(T_converged[i - 1, j])
-            T_converged[i - 1, j]
-        else
-            T_tmp      = Vector{typeof(1.0u"K")}(undef, 10)
-            T_tmp[1:8] .= Tmean_july
-            T_tmp[9]    = (Tmean_july + Tdeep) / 2
-            T_tmp[10]   = Tdeep
-            T_tmp
-        end
-
-        st = SolarTerrain(;
-            latitude             = lat,
-            longitude            = lon,
-            elevation            = elev,
-            slope                = slp,
-            aspect               = asp,
-            albedo               = 0.15,
-            atmospheric_pressure = pres,
-            horizon_angles       = @view(horizons_u[i, j, :]),
-        )
-
-        mt = MicroTerrain(;
-            elevation        = elev,
-            roughness_height = 0.004u"m",
-            karman_constant  = 0.4,
-            dyer_constant    = 16.0,
-            viewfactor       = 1.0,
-        )
-
-        result = simulate_microclimate(
-            st, mt, soil_thermal_model, wp;
-            depths, heights, solar_model,
-            initial_soil_temperature = T_init,
-            vapour_pressure_equation = vp_method,
-            iterate_day = 5,
-        )
-
-        # Save midnight (hour 0) profile as warm-start seed for the row below.
-        T_converged[i, j] = collect(result.soil_temperature[1, :])
-
-        @inbounds for (k, s) in enumerate(snapshot_steps)
-            T_soil0[i,  j, k] = ustrip(u"°C", result.soil_temperature[s, 1])
-            T_air1[i,   j, k] = ustrip(u"°C", result.profile[s].air_temperature[1])
-            T_air2[i,   j, k] = ustrip(u"°C", result.profile[s].air_temperature[2])
-            T_soil10[i, j, k] = ustrip(u"°C", result.soil_temperature[s, 4])
-        end
-
-        d = Threads.atomic_add!(n_done, 1)
-        if Threads.threadid() == 1 && (d % nx_utm == 0 || d == n_total - 1)
-            pct = round(100 * (d + 1) / n_total; digits = 1)
-            print("  row $i/$ny_utm  ($(d+1)/$n_total, $pct%)   \r")
-        end
-    end
-end
-println("\nSimulation complete.")
+# Unpack output slices — (ny, nx, nsteps, nselected)
+T_soil0  = grid_result.soil_temperature[:, :, :, 1]   # soil surface (0 cm)
+T_soil10 = grid_result.soil_temperature[:, :, :, 2]   # soil at 10 cm
+T_air1   = grid_result.air_temperature[:,  :, :, 1]   # air at 1 cm
+T_air2   = grid_result.air_temperature[:,  :, :, 2]   # air at 2 m
 
 # ============================================================================
 # Step 10: Plots — one 2×3 figure per variable

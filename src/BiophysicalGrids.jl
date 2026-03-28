@@ -55,6 +55,12 @@ include("WeatherDataSources/ERA5.jl")
 include("WeatherDataSources/climate_scenarios.jl")
 
 # ---------------------------------------------------------------------------
+# Grid simulation
+# ---------------------------------------------------------------------------
+include("Grid/solar_grid.jl")
+include("Grid/microclimate_grid.jl")
+
+# ---------------------------------------------------------------------------
 # Exports
 # ---------------------------------------------------------------------------
 
@@ -97,6 +103,14 @@ export
     HourlyTimeseries,
     # Simulation
     simulate_microclimate,
+    # Grid simulation
+    solar_radiation_grid,
+    GridInitStrategy,
+    RowWarmStart,
+    ERA5SoilInit,
+    SolarMatchInit,
+    LatitudeMatchInit,
+    simulate_microclimate_grid,
     # Aerosol
     get_aerosol_optical_depth,
     # Terrain utilities
