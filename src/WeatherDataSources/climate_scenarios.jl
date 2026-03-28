@@ -25,8 +25,8 @@ where the scenario deltas are drawn from, not where the baseline weather came fr
 
 # Example
 ```julia
-weather    = get_weather(TerraClimate, lon, lat; tstart = Date(2000), elevation)
-weather_2c = apply_climate_scenario(TerraClimate{Plus2C}, weather, lon, lat; tstart = Date(2000))
+weather    = get_weather(TerraClimate, Point([lon, lat]); tstart = Date(2000), elevation)
+weather_2c = apply_climate_scenario(TerraClimate{Plus2C}, weather, Point([lon, lat]); tstart = Date(2000))
 result_2c  = simulate_microclimate(solar_terrain, micro_terrain, soil_thermal_model, weather_2c)
 ```
 """
@@ -36,8 +36,7 @@ function apply_climate_scenario end
 function apply_climate_scenario(
     ::Type{Historical},
     weather,
-    ::Real,
-    ::Real;
+    ::Any;
     vapour_pressure_method = GoffGratch(),
 )
     return weather
@@ -46,14 +45,13 @@ end
 function apply_climate_scenario(
     ::Type{TerraClimate{S}},
     weather,
-    lon::Real,
-    lat::Real;
+    point;
     tstart::Date,
     tend::Date = tstart,
     vapour_pressure_method = GoffGratch(),
 ) where {S <: RasterDataSources.WarmingScenario}
-    base = _fetch_tc_raw(lon, lat, tstart, tend, Historical)
-    scen = _fetch_tc_raw(lon, lat, tstart, tend, S)
+    base = _fetch_tc_raw(point, tstart, tend, Historical)
+    scen = _fetch_tc_raw(point, tstart, tend, S)
 
     # Deltas: temperature additive (K), others multiplicative or additive in native units
     tmax_delta_K = u"K".(scen.tmax .* u"°C") .- u"K".(base.tmax .* u"°C")
@@ -120,7 +118,7 @@ end
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-function _fetch_tc_raw(lon::Real, lat::Real, tstart::Date, tend::Date, scenario)
+function _fetch_tc_raw(point, tstart::Date, tend::Date, scenario)
     layers = (:tmax, :tmin, :ppt, :vpd, :srad)
     tmax = Float64[]; tmin = Float64[]
     ppt  = Float64[]; vpd  = Float64[]; srad = Float64[]
@@ -128,7 +126,7 @@ function _fetch_tc_raw(lon::Real, lat::Real, tstart::Date, tend::Date, scenario)
         paths = getraster(TerraClimate{scenario}, layers; date = Date(yr))
         for (sym, vec) in ((:tmax, tmax), (:tmin, tmin),
                            (:ppt, ppt), (:vpd, vpd), (:srad, srad))
-            append!(vec, _extract_monthly(Raster(paths[sym]; lazy = true), lon, lat))
+            append!(vec, _extract_monthly(Raster(paths[sym]; lazy = true), point))
         end
     end
     return (; tmax, tmin, ppt, vpd, srad)

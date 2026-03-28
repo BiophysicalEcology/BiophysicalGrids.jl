@@ -26,7 +26,7 @@ using FluidProperties
 using Unitful
 using Dates
 
-lon, lat = -89.4557, 43.1379
+point     = Point([-89.4557, 43.1379]) # x, y i.e. longitude, latitude
 elevation = 270.0u"m"
 
 # ---------------------------------------------------------------------------
@@ -35,7 +35,7 @@ elevation = 270.0u"m"
 # The lapse rate correction adjusts TerraClimate grid-cell temperatures
 # to the site elevation. grid_elevation defaults to 0 m (sea level) when
 # not supplied — provide it for better accuracy.
-weather = get_weather(TerraClimate, lon, lat;  #TODO make it for a point (geointerface-compatible)
+weather = get_weather(TerraClimate, point;
     tstart = Date(2000),
     elevation,
     # grid_elevation defaults to elevation (no lapse correction).
@@ -55,8 +55,8 @@ solar_terrain = SolarTerrain(;
     horizon_angles    = fill(0.0u"°", 24),
     albedo            = 0.15,
     atmospheric_pressure = atmospheric_pressure(elevation), # TODO delete?
-    latitude          = lat * u"°", # TODO make point
-    longitude         = lon * u"°", # TODO make point
+    latitude          = latitude(point) * u"°",
+    longitude         = longitude(point) * u"°",
 )
 
 micro_terrain = MicroTerrain(;
@@ -89,14 +89,14 @@ soil_thermal_model = CampbelldeVriesSoilThermal(;
 # the weather forcing by the TerraClimate scenario deltas.  The baseline
 # weather download (Step 1) is always from the historical record; the scenario
 # only modifies the environment structs passed to simulate_microclimate.
-weather_scenario = apply_climate_scenario(Historical, weather, lon, lat)
-# weather_scenario = apply_climate_scenario(TerraClimate{Plus2C}, weather, lon, lat; tstart = Date(2000))
-# weather_scenario = apply_climate_scenario(TerraClimate{Plus4C}, weather, lon, lat; tstart = Date(2000))
+weather_scenario = apply_climate_scenario(Historical, weather, point)
+# weather_scenario = apply_climate_scenario(TerraClimate{Plus2C}, weather, point; tstart = Date(2000))
+# weather_scenario = apply_climate_scenario(TerraClimate{Plus4C}, weather, point; tstart = Date(2000))
 
 # ---------------------------------------------------------------------------
 # Step 5: simulate
 # ---------------------------------------------------------------------------
-aerosol_optical_depth = get_aerosol_optical_depth(lat, lon, 0.01, 6)
+aerosol_optical_depth = get_aerosol_optical_depth(point, 0.01, 6)
 solar_model = SolarProblem(; aerosol_optical_depth)
 # TODO Zenodo URL for gads.nc as an artifact in Artifacts.toml
 
@@ -129,12 +129,12 @@ air_T  = [p.air_temperature for p in result.profile]  # per-height air temp
 # # (boundary-layer and soil-energy calculations).
 # # ---------------------------------------------------------------------------
 # vp = Huang()   # faster than GoffGratch(); also try Teten() for maximum speed
-# weather_huang = get_weather(TerraClimate, lon, lat;
+# weather_huang = get_weather(TerraClimate, point;
 #     tstart = Date(2000),
 #     elevation,
 #     vapour_pressure_method = vp,
 # )
-# scenario_huang = apply_climate_scenario(Historical, weather_huang, lon, lat;
+# scenario_huang = apply_climate_scenario(Historical, weather_huang, point;
 #     vapour_pressure_method = vp,
 # )
 # result_huang = simulate_microclimate(
@@ -151,13 +151,13 @@ air_T  = [p.air_temperature for p in result.profile]  # per-height air temp
 # # ---------------------------------------------------------------------------
 # # Sensitivity: dry adiabatic lapse rate
 # # ---------------------------------------------------------------------------
-# weather_dry = get_weather(TerraClimate, lon, lat;
+# weather_dry = get_weather(TerraClimate, point;
 #     tstart = Date(2000),
 #     elevation,
 #     lapse_rate_type        = DryAdiabaticLapseRate(),
 #     vapour_pressure_method = GoffGratch(),
 # )
-# scenario_dry = apply_climate_scenario(Historical, weather_dry, lon, lat;
+# scenario_dry = apply_climate_scenario(Historical, weather_dry, point;
 #     vapour_pressure_method = GoffGratch(),
 # )
 # result_dry = simulate_microclimate(
@@ -170,12 +170,12 @@ air_T  = [p.air_temperature for p in result.profile]  # per-height air temp
 # # ---------------------------------------------------------------------------
 # # Multi-year run (2000–2002)
 # # ---------------------------------------------------------------------------
-# weather_3yr = get_weather(TerraClimate, lon, lat;
+# weather_3yr = get_weather(TerraClimate, point;
 #     tstart = Date(2000), tend = Date(2002),
 #     elevation,
 #     vapour_pressure_method = GoffGratch(),
 # )
-# scenario_3yr = apply_climate_scenario(Historical, weather_3yr, lon, lat;
+# scenario_3yr = apply_climate_scenario(Historical, weather_3yr, point;
 #     vapour_pressure_method = GoffGratch(),
 # )
 # result_3yr = simulate_microclimate(

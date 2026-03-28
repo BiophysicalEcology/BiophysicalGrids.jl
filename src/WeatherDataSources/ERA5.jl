@@ -1,5 +1,5 @@
 """
-    get_weather(ERA5, lon, lat; tstart, tend, kwargs...) -> NamedTuple
+    get_weather(ERA5, point; tstart, tend, kwargs...) -> NamedTuple
 
 Download ERA5 hourly reanalysis data for a point location via the ARCO-ERA5 cloud
 Zarr store (requires an internet connection; data are cached locally by `Zarr.jl`).
@@ -10,7 +10,8 @@ which triggers `daily=true` mode in `simulate_microclimate` — consecutive cale
 days inherit soil state and iterate once rather than converging independently.
 
 # Arguments
-- `lon`, `lat` : decimal degrees (longitude in −180..360, latitude in −90..90)
+- `point` : GeoInterface-compatible point geometry (e.g. `Point([lon, lat])`);
+  longitude in −180..360, latitude in −90..90
 - `tstart`, `tend` : `DateTime` bounds (inclusive; UTC; must span whole days)
 
 # Keyword arguments
@@ -37,7 +38,7 @@ days inherit soil state and iterate once rather than converging independently.
 # Example
 ```julia
 using BiophysicalGrids, Dates
-weather = get_weather(ERA5, -89.46, 43.14;
+weather = get_weather(ERA5, Point([-89.46, 43.14]);
     tstart    = DateTime(2000, 1, 1),
     tend      = DateTime(2000, 12, 31, 23),
     elevation = 270.0u"m",
@@ -46,8 +47,7 @@ weather = get_weather(ERA5, -89.46, 43.14;
 """
 function get_weather(
     ::Type{ERA5},
-    lon::Real,
-    lat::Real;
+    point;
     tstart::DateTime,
     tend::DateTime,
     elevation = nothing,
@@ -56,6 +56,7 @@ function get_weather(
     vapour_pressure_method = GoffGratch(),
     use_era5_soil_moisture::Bool = false,
 )
+    lon, lat = _lonlat(point)
     # -----------------------------------------------------------------------
     # Open ERA5 ARCO Zarr store
     # -----------------------------------------------------------------------

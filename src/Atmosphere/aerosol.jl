@@ -10,7 +10,7 @@
 # arbitrary location, humidity, month, and wavelength grid.
 
 """
-    get_aerosol_optical_depth(latitude, longitude, relative_humidity, month;
+    get_aerosol_optical_depth(point, relative_humidity, month;
         gads_file   = joinpath(homedir(), "Spatial_Data", "gads", "gads.nc"),
         interpolate = true,
         wavelengths = SolarRadiation.DEFAULT_WAVELENGTHS,
@@ -20,8 +20,7 @@ Return the spectral aerosol optical depth vector at the requested location,
 relative humidity, and time of year, interpolated to `wavelengths`.
 
 # Arguments
-- `latitude`            : degrees north (−90 to 90)
-- `longitude`           : degrees east  (−180 to 180)
+- `point`               : GeoInterface-compatible point geometry (e.g. `Point([lon, lat])`)
 - `relative_humidity`   : 0–1 fraction
 - `month`               : 1–12; used to blend NH summer (July) and winter
                           (January) climatologies via cosine interpolation
@@ -41,21 +40,21 @@ wavelength.  Values are ≥ 0 (dimensionless).
 
 # Example
 ```julia
-aod = get_aerosol_optical_depth(45.92, 6.87, 0.60, 7)   # Chamonix, July, 60 % RH
+aod = get_aerosol_optical_depth(Point([6.87, 45.92]), 0.60, 7)   # Chamonix, July, 60 % RH
 solar_model = SolarProblem(aerosol_optical_depth = aod)
 result = simulate_microclimate(solar_terrain, micro_terrain, soil, weather;
                                solar_model)
 ```
 """
 function get_aerosol_optical_depth(
-    latitude          :: Real,
-    longitude         :: Real,
+    point             ,
     relative_humidity :: Real,
     month             :: Int;
     gads_file   :: AbstractString = joinpath(get(ENV, "RASTERDATASOURCES_PATH", homedir()), "gads", "gads.nc"),
     interpolate :: Bool           = true,
     wavelengths                   = SolarRadiation.DEFAULT_WAVELENGTHS,
 )
+    lon, lat = _lonlat(point)
     isfile(gads_file) || error(
         "GADS file not found: \"$gads_file\"\n" *
         "Set the `gads_file` keyword or place gads.nc at the default path.")
@@ -96,11 +95,11 @@ function get_aerosol_optical_depth(
     lat_levels = dims(da_rh, :lat).val
 
     if interpolate
-        da_spatial = _bilinear_latlon(da_rh, Float64(latitude), Float64(longitude),
+        da_spatial = _bilinear_latlon(da_rh, Float64(lat), Float64(lon),
                                       lat_levels, lon_levels)
     else
-        da_spatial = da_rh[lon = Near(Float64(longitude)),
-                           lat = Near(Float64(latitude))]
+        da_spatial = da_rh[lon = Near(Float64(lon)),
+                           lat = Near(Float64(lat))]
     end
     # da_spatial is now a 1-D DimArray indexed by wavelength
 

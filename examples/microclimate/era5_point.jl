@@ -22,7 +22,7 @@ using FluidProperties
 using Unitful
 using Dates
 
-lon, lat  = -89.4557, 43.1379
+point     = Point([-89.4557, 43.1379])
 elevation = 270.0u"m"
 
 # ---------------------------------------------------------------------------
@@ -33,7 +33,7 @@ elevation = 270.0u"m"
 # no lapse correction, or supply the ERA5 orography value for this cell
 # (available from the Zarr store as the `z` variable / 9.80665 m).
 println("Downloading ERA5 data...")
-weather = get_weather(ERA5, lon, lat;
+weather = get_weather(ERA5, point;
     tstart    = DateTime(2000, 1, 1),
     tend      = DateTime(2000, 12, 31, 23),
     elevation,
@@ -54,8 +54,8 @@ solar_terrain = SolarTerrain(;
     horizon_angles       = fill(0.0u"°", 24),
     albedo               = 0.15,
     atmospheric_pressure = atmospheric_pressure(elevation),
-    latitude             = lat * u"°",
-    longitude            = lon * u"°",
+    latitude             = latitude(point) * u"°",
+    longitude            = longitude(point) * u"°",
 )
 
 micro_terrain = MicroTerrain(;
@@ -87,7 +87,7 @@ soil_thermal_model = CampbelldeVriesSoilThermal(;
 # DailyMinMaxEnvironment — no need to specify it explicitly.
 # Pass hourly_rainfall=true to use sub-daily (hourly) rainfall for soil
 # moisture calculations instead of the daily totals.
-aerosol_optical_depth = get_aerosol_optical_depth(lat, lon, 0.01, 6)
+aerosol_optical_depth = get_aerosol_optical_depth(point, 0.01, 6)
 solar_model = SolarProblem(; aerosol_optical_depth)
 
 println("Running microclimate simulation...")

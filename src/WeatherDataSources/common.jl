@@ -19,12 +19,24 @@ function mean_annual_temperature(tmax_vec::AbstractVector, tmin_vec::AbstractVec
 end
 
 """
-    extract_point(raster, lon, lat)
+    _lonlat(point) → (lon, lat)
+
+Extract longitude and latitude from any GeoInterface-compatible point geometry.
+"""
+function _lonlat(point)
+    GeoInterface.geomtrait(point) isa GeoInterface.PointTrait ||
+        throw(ArgumentError("Expected a GeoInterface point geometry, got $(typeof(point))"))
+    return GeoInterface.x(point), GeoInterface.y(point)
+end
+
+"""
+    extract_point(raster, point)
 
 Extract a scalar (or time-series) value from `raster` at the nearest grid point
-to (`lon`, `lat`). Returns the bare array when the raster has a time dimension.
+to the given GeoInterface-compatible point geometry.
 """
-function extract_point(raster, lon::Real, lat::Real)
+function extract_point(raster, point)
+    lon, lat = _lonlat(point)
     return raster[X(Near(lon)), Y(Near(lat))]
 end
 

@@ -1,7 +1,7 @@
 """
-    get_weather(TerraClimate, lon, lat; tstart, tend, kwargs...)
-    get_weather(TerraClimate{Plus2C}, lon, lat; ...)
-    get_weather(TerraClimate{Plus4C}, lon, lat; ...)
+    get_weather(TerraClimate, point; tstart, tend, kwargs...)
+    get_weather(TerraClimate{Plus2C}, point; ...)
+    get_weather(TerraClimate{Plus4C}, point; ...)
 
 Download TerraClimate monthly climate data for the given location and time period and
 return a `NamedTuple` of Microclimate.jl environment objects ready to pass to
@@ -12,7 +12,7 @@ Variables extracted: `tmax`, `tmin`, `ws` (wind), `vap` (vapour pressure), `vpd`
 pressure deficit), `srad` (shortwave radiation), `ppt` (precipitation).
 
 # Arguments
-- `lon`, `lat`: decimal degrees (longitude, latitude)
+- `point`: any GeoInterface-compatible point geometry (e.g. `Point([lon, lat])`)
 - `tstart`, `tend`: simulation period as `Date` values (year is used; month/day ignored).
   Default `tend = tstart` (single year).
 
@@ -41,7 +41,7 @@ pressure deficit), `srad` (shortwave radiation), `ppt` (precipitation).
 
 # Example
 ```julia
-weather = get_weather(TerraClimate, -89.4557, 43.1379;
+weather = get_weather(TerraClimate, Point([-89.4557, 43.1379]);
     tstart = Date(2000), tend = Date(2001),
     elevation = 270.0u"m",
     vapour_pressure_method = GoffGratch(),
@@ -51,8 +51,7 @@ weather = get_weather(TerraClimate, -89.4557, 43.1379;
 """
 function get_weather(
     ::Type{<:TerraClimate},
-    lon::Real,
-    lat::Real;
+    point;
     tstart::Date,
     tend::Date = tstart,
     scenario::Type{<:RasterDataSources.WarmingScenario} = Historical,
@@ -61,6 +60,7 @@ function get_weather(
     lapse_rate_type::LapseRate = EnvironmentalLapseRate(),
     vapour_pressure_method = GoffGratch(),
 )
+    lon, lat = _lonlat(point)
     nyears = year(tend) - year(tstart) + 1
     years  = year(tstart):year(tend)
 
@@ -84,7 +84,7 @@ function get_weather(
             (:soil, soil_all),
         )
             r    = Raster(paths[sym]; lazy = true)
-            vals = _extract_monthly(r, lon, lat)
+            vals = _extract_monthly(r, point)
             append!(vec, vals)
         end
     end
@@ -212,7 +212,8 @@ end
 # ---------------------------------------------------------------------------
 
 """Extract the 12 monthly values from a TerraClimate raster at the nearest grid point."""
-function _extract_monthly(raster, lon::Real, lat::Real)
+function _extract_monthly(raster, point)
+    lon, lat = _lonlat(point)
     ts = raster[X(Near(lon)), Y(Near(lat))]
     return Float64.(collect(ts))
 end

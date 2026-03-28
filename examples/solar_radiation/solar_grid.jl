@@ -37,16 +37,16 @@ center_lat = 45.92   # °N
 extent_lat = 0.0833  # degrees latitude
 extent_lon = 0.120   # degrees longitude
 
-lon_min = center_lon - extent_lon / 2
-lon_max = center_lon + extent_lon / 2
-lat_min = center_lat - extent_lat / 2
-lat_max = center_lat + extent_lat / 2
+region = Extent(
+    X = (center_lon - extent_lon / 2, center_lon + extent_lon / 2),
+    Y = (center_lat - extent_lat / 2, center_lat + extent_lat / 2),
+)
 
 simulation_day   = 172               # 21 June — summer solstice
 hour_step        = 1.0
 hours_of_day     = 6.0:hour_step:20.0
 default_albedo   = 0.2
-n_horizon_angles = 24
+n_horizon_angles = 32
 
 # ============================================================================
 # Step 1: Download SRTM tile and crop to study area
@@ -54,7 +54,7 @@ n_horizon_angles = 24
 
 println("Downloading SRTM DEM and reprojecting to UTM...")
 (; utm_dem, x_coords_utm, y_coords_utm, nx_utm, ny_utm, cs) =
-    load_utm_dem(center_lon, center_lat, extent_lon, extent_lat)
+    load_utm_dem(region)
 println("  UTM grid: $(nx_utm) × $(ny_utm) pixels, " *
         "cell size ≈ $(round(cs[1]; digits=1)) × $(round(cs[2]; digits=1)) m")
 
@@ -66,12 +66,12 @@ println("Computing terrain grids (slope, aspect, horizons)...")
 (; dem_data, data_is_xy, y_descending,
    elevation_m, slope_deg, aspect_deg,
    latitude_deg, longitude_deg, pressure_r,
-   horizons_u) = compute_terrain_grids(utm_dem, x_coords_utm, y_coords_utm;
-                                       n_horizon_angles)
+   horizons_u) = compute_terrain_grids(utm_dem; n_horizon_angles)
 
 albedo_r = map(x -> ismissing(x) ? missing : default_albedo, elevation_m)
 
-aerosol_optical_depth = get_aerosol_optical_depth(center_lat, center_lon, 0.01, 6)
+center_point          = Point([center_lon, center_lat])
+aerosol_optical_depth = get_aerosol_optical_depth(center_point, 0.01, 6)
 solar_model = SolarProblem(; scattered_uv = false, aerosol_optical_depth)
 
 # ============================================================================

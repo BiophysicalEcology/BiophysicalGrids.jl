@@ -46,14 +46,14 @@ center_lat = 45.92    # °N
 extent_lat = 0.0833   # ~100 SRTM pixels N–S
 extent_lon = 0.120    # ~100 SRTM pixels E–W
 
-lon_min = center_lon - extent_lon / 2
-lon_max = center_lon + extent_lon / 2
-lat_min = center_lat - extent_lat / 2
-lat_max = center_lat + extent_lat / 2
+region = Extent(
+    X = (center_lon - extent_lon / 2, center_lon + extent_lon / 2),
+    Y = (center_lat - extent_lat / 2, center_lat + extent_lat / 2),
+)
 
 year             = 2000
 july             = 7          # month index
-n_horizon_angles = 24
+n_horizon_angles = 32
 
 depths  = [0.0, 2.5, 5.0, 10.0, 15.0, 20.0, 30.0, 50.0, 100.0, 200.0]u"cm"
 heights = [0.01, 2.0]u"m"
@@ -64,7 +64,6 @@ heights = [0.01, 2.0]u"m"
 #   Huang()  — more accurate than Teten, faster than GoffGratch
 #   VPLookupTable() — precomputed table, fastest for gridded runs
 vp_method = VPLookupTable()
-
 
 # Time snapshots: step index is 1-based (hour + 1)
 snapshot_hours = collect(0:23)          # all 24 hours of the day
@@ -82,7 +81,7 @@ panel_labels = ["Midnight", "Dawn", "Mid-morning", "Midday", "Mid-afternoon", "D
 
 println("Downloading SRTM DEM and reprojecting to UTM...")
 (; utm_dem, x_coords_utm, y_coords_utm, nx_utm, ny_utm, cs) =
-    load_utm_dem(center_lon, center_lat, extent_lon, extent_lat)
+    load_utm_dem(region)
 println("  UTM grid: $(nx_utm) × $(ny_utm) pixels, " *
         "cell size ≈ $(round(cs[1]; digits=1)) × $(round(cs[2]; digits=1)) m")
 
@@ -90,8 +89,7 @@ println("Computing terrain grids (slope, aspect, horizons)...")
 (; dem_data, data_is_xy, y_descending,
    elevation_m, slope_deg, aspect_deg,
    latitude_deg, longitude_deg, pressure_r,
-   horizons_u) = compute_terrain_grids(utm_dem, x_coords_utm, y_coords_utm;
-                                       n_horizon_angles)
+   horizons_u) = compute_terrain_grids(utm_dem; n_horizon_angles)
 
 # ============================================================================
 # Step 7: TerraClimate weather — full year at center pixel, slice to July
@@ -106,7 +104,8 @@ println("Obtaining TerraClimate weather for year $year...")
 valid_elev    = filter(!isnan, vec(dem_data))
 center_elev_u = median(valid_elev) * u"m"
 
-weather = get_weather(TerraClimate, center_lon, center_lat;
+center_point = Point([center_lon, center_lat])
+weather = get_weather(TerraClimate, center_point;
     tstart    = Date(year),
     elevation = center_elev_u,
 )
@@ -182,7 +181,7 @@ soil_thermal_model = CampbelldeVriesSoilThermal(;
     return_flow_threshold = 0.162,
 )
 
-aerosol_optical_depth = get_aerosol_optical_depth(center_lat, center_lon, 0.01, july)
+aerosol_optical_depth = get_aerosol_optical_depth(center_point, 0.01, july)
 solar_model = SolarProblem(; aerosol_optical_depth)
 
 # Lapse-correct temperature and humidity for a given elevation difference (Δz = pixel − center).

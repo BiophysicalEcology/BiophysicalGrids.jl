@@ -25,7 +25,7 @@ using Plots
 using StatsPlots
 
 # ── Location ──────────────────────────────────────────────────────────────
-lon, lat  = -89.4557, 43.1379
+point     = Point([-89.4557, 43.1379])
 elevation = 270.0u"m"
 
 months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
@@ -42,8 +42,8 @@ heights = [1.0, 50.0, 100.0]u"cm"    # ground node + two climbing heights
 # ── Step 1: TerraClimate weather ──────────────────────────────────────────
 println("Obtaining TerraClimate weather (year 2000)...")
 year = 2000
-weather          = get_weather(TerraClimate, lon, lat; tstart = Date(year), elevation)
-weather_scenario = apply_climate_scenario(Historical, weather, lon, lat)
+weather          = get_weather(TerraClimate, point; tstart = Date(year), elevation)
+weather_scenario = apply_climate_scenario(Historical, weather, point)
 
 # ── Step 2: Terrain and soil ──────────────────────────────────────────────
 solar_terrain = SolarTerrain(;
@@ -53,8 +53,8 @@ solar_terrain = SolarTerrain(;
     horizon_angles       = fill(0.0u"°", 24),
     albedo               = 0.15,
     atmospheric_pressure = atmospheric_pressure(elevation),
-    latitude             = lat * u"°",
-    longitude            = lon * u"°",
+    latitude             = latitude(point) * u"°",
+    longitude            = longitude(point) * u"°",
 )
 
 micro_terrain = MicroTerrain(;
@@ -93,7 +93,7 @@ function with_shade(w, shade_frac)
     merge(w, (; environment_daily = new_ed))
 end
 
-aerosol_optical_depth = get_aerosol_optical_depth(lat, lon, 0.01, 6)
+aerosol_optical_depth = get_aerosol_optical_depth(point, 0.01, 6)
 solar_model = SolarProblem(; aerosol_optical_depth)
 
 common_micro_kwargs = (;

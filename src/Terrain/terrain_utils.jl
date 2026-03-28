@@ -22,10 +22,15 @@ function get_utm_crs(raster)
 end
 
 """
-    load_utm_dem(center_lon, center_lat, extent_lon, extent_lat) -> NamedTuple
+    load_utm_dem(extent::Extent) -> NamedTuple
 
 Download an SRTM DEM tile, crop to the requested bounding box, and reproject
 to the local UTM zone.
+
+`extent` is an `Extents.Extent` bounding box, e.g.:
+```julia
+load_utm_dem(Extent(X = (lon_min, lon_max), Y = (lat_min, lat_max)))
+```
 
 # Returns
 NamedTuple with fields:
@@ -36,11 +41,9 @@ NamedTuple with fields:
 - `ny_utm`        : number of rows
 - `cs`            : `(dx, dy)` cell size tuple (m)
 """
-function load_utm_dem(center_lon, center_lat, extent_lon, extent_lat)
-    lon_min = center_lon - extent_lon / 2
-    lon_max = center_lon + extent_lon / 2
-    lat_min = center_lat - extent_lat / 2
-    lat_max = center_lat + extent_lat / 2
+function load_utm_dem(extent::Extent)
+    lon_min, lon_max = extent.X
+    lat_min, lat_max = extent.Y
 
     tile_paths  = getraster(SRTM; bounds = (lon_min, lat_min, lon_max, lat_max))
     valid_paths = filter(!ismissing, vec(tile_paths))
@@ -62,12 +65,12 @@ function load_utm_dem(center_lon, center_lat, extent_lon, extent_lat)
 end
 
 """
-    compute_terrain_grids(utm_dem, x_coords_utm, y_coords_utm; n_horizon_angles=24)
-        -> NamedTuple
+    compute_terrain_grids(utm_dem; n_horizon_angles=24) -> NamedTuple
 
 Compute the full set of per-pixel terrain grids needed for solar radiation and
 microclimate simulations from a UTM-projected DEM raster.
 
+Coordinate vectors are extracted directly from the raster lookup.
 Handles the (X,Y) vs (Y,X) internal Rasters dimension ordering automatically.
 
 # Returns
@@ -83,8 +86,9 @@ NamedTuple with fields:
 - `pressure_r`    : atmospheric pressure raster (`Pa`)
 - `horizons_u`    : `(ny, nx, n_dirs)` horizon-angle array with `u"°"` units
 """
-function compute_terrain_grids(utm_dem, x_coords_utm, y_coords_utm;
-                               n_horizon_angles = 24)
+function compute_terrain_grids(utm_dem; n_horizon_angles = 24)
+    x_coords_utm = collect(lookup(utm_dem, X))
+    y_coords_utm = collect(lookup(utm_dem, Y))
     nx_utm = length(x_coords_utm)
     ny_utm = length(y_coords_utm)
     cs     = (abs(x_coords_utm[2] - x_coords_utm[1]),

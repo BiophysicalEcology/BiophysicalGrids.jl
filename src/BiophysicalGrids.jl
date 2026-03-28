@@ -9,9 +9,10 @@ using Microclimate
 using Microclimate: DEFAULT_DEPTHS, example_soil_moisture_model
 using SolarRadiation
 using FluidProperties
-using FluidProperties: GoffGratch, Teten, Huang, VapourPressureEquation
+using FluidProperties: GoffGratch, Teten, Huang, VapourPressureEquation, VPLookupTable
 
 using GeoFormatTypes
+using GeoInterface
 using RasterDataSources
 using RasterDataSources: layername
 using DimensionalData: DimArray, Dim, At, dims
@@ -21,6 +22,14 @@ using Rasters
 using Rasters: X, Y, Ti, Near, Between, lookup
 using Geomorphometry
 using Geomorphometry: Horn
+
+const Point = GeoInterface.Wrappers.Point
+
+"""longitude(point) → degrees east — extract longitude from a GeoInterface point."""
+longitude(point) = GeoInterface.x(point)
+
+"""latitude(point) → degrees north — extract latitude from a GeoInterface point."""
+latitude(point) = GeoInterface.y(point)
 
 # ---------------------------------------------------------------------------
 # Atmosphere
@@ -50,6 +59,11 @@ include("WeatherDataSources/climate_scenarios.jl")
 # ---------------------------------------------------------------------------
 
 export
+    # Point / extent geometry
+    Point,
+    longitude,
+    latitude,
+    Extent,
     # Lapse rate types
     LapseRate,
     EnvironmentalLapseRate,
@@ -91,10 +105,11 @@ export
     compute_terrain_grids,
     compute_horizon_angles,
     ascending_y,
-    # FluidProperties vapour pressure methods (not exported by FluidProperties itself)
+    # FluidProperties vapour pressure methods
     VapourPressureEquation,
     GoffGratch,
     Teten,
-    Huang
+    Huang,
+    VPLookupTable
 
 end
