@@ -207,42 +207,59 @@ function _load_weather(source::Type, area::Extent, years)
     stack = Rasters.replace_missing(stack, NaN)
     # Ti-count check runs on the first Ti-varying layer only — static ones
     # (Elevation() declarations) have no Ti axis and are excluded.
+    _check_ti_length(source, stack, years)
+    return stack
+end
+
+# A trailing, still-in-progress calendar year (e.g. SILO's near-real-time
+# data) legitimately loads fewer days than a full year; only that shortfall
+# is allowed through.
+function _check_ti_length(source::Type, stack::RasterStack, years)
     cal = weather_calendar(source)
     native = native_timestep(source)
     expected = length(_days_of_year(cal, years)) * samples_per_day(native)
     ref = _first_ti_layer(stack)
     n = length(dims(ref, Ti))
-    n == expected || error(
-        "$(nameof(source)): loaded Ti=$n, but the source declares $expected " *
+    n == expected && return nothing
+    prior_expected = length(_days_of_year(cal, years[1:end-1])) * samples_per_day(native)
+    is_trailing_partial_year = cal isa Daily &&
+        last(years) == Dates.year(Dates.today()) &&
+        prior_expected <= n < expected
+    is_trailing_partial_year && return nothing
+    error("$(nameof(source)): loaded Ti=$n, but the source declares $expected " *
         "($(nameof(typeof(cal))) × " *
         "$(nameof(typeof(native))), $(length(years)) years)")
-    return stack
 end
 
 function _load_weather_points(source::Type, points_dim, years)
     primary_stack = _load_canonical_points(source, layers(source), points_dim, years)
     baseline = fallback_source(source)
-    stack = baseline === nothing ?
-        RasterStack(primary_stack) :
-        RasterStack(merge(primary_stack,
+    merged = baseline === nothing ?
+        primary_stack :
+        merge(primary_stack,
             _match_fallback_resolution_points(source, baseline,
                 _load_canonical_points(baseline, fallback_layers(source), points_dim, years),
-                primary_stack, years)))
+                primary_stack, years))
+    stack = RasterStack(_truncate_to_common_ti(merged))
     stack = Rasters.replace_missing(stack, NaN)
-    cal = weather_calendar(source)
-    native = native_timestep(source)
-    expected = length(_days_of_year(cal, years)) * samples_per_day(native)
-    ref = _first_ti_layer(stack)
-    n = length(dims(ref, Ti))
-    n == expected || error(
-        "$(nameof(source)): loaded Ti=$n, but the source declares $expected " *
-        "($(nameof(typeof(cal))) × " *
-        "$(nameof(typeof(native))), $(length(years)) years)")
+    _check_ti_length(source, stack, years)
     return stack
 end
 
 @inline _first_ti_layer(stack::RasterStack) =
     first(l for l in values(stack) if hasdim(l, Ti))
+
+# Near-real-time layers (e.g. SILO's current year) can differ in day count
+# across variables; trim all Ti layers to the shortest so they merge cleanly.
+function _truncate_to_common_ti(layers::NamedTuple)
+    ti_lengths = [length(dims(l, Ti)) for l in values(layers) if hasdim(l, Ti)]
+    isempty(ti_lengths) && return layers
+    n = minimum(ti_lengths)
+    all(==(n), ti_lengths) && return layers
+    return map(layers) do l
+        hasdim(l, Ti) && length(dims(l, Ti)) > n ? view(l, Ti(1:n)) : l
+    end
+end
 
 # ---------------------------------------------------------------------------
 # Per-loader file-reading
