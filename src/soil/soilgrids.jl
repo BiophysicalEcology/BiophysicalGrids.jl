@@ -14,15 +14,37 @@ native_field(::TextureVariable{<:Any, Field}) where {Field} = Field
 
 texture_variables(::Type{SoilGrids}) = (
     TextureVariable(:bulk_density, :bdod, u"Mg/m^3", raw -> raw / 100),  # cg/cm^3 -> Mg/m^3
-    TextureVariable(:clay, :clay),  # g/100g already == %
-    TextureVariable(:silt, :silt),
-    TextureVariable(:sand, :sand),
+    TextureVariable(:clay, :clay, 1, raw -> raw / 10),  # g/kg -> g/100g (%)
+    TextureVariable(:silt, :silt, 1, raw -> raw / 10),
+    TextureVariable(:sand, :sand, 1, raw -> raw / 10),
 )
 
+# `area` is plain lon/lat degrees; SoilGrids/SLGA rasters use a projected CRS
+# (metres) -- reproject before cropping or the degree values get read as
+# metres in the raster's own CRS, silently cropping the wrong location.
+# Source CRS given as a raw proj string, not EPSG(4326): GDAL's EPSG:4326
+# means official (lat, lon) axis order, not (lon, lat) -- a proj string is
+# unambiguous.
+const _WGS84_LONLAT = ProjString("+proj=longlat +datum=WGS84 +no_defs")
+
+function _reproject_extent(area::Extent, target_crs)
+    corners = [
+        (area.X[1], area.Y[1]), (area.X[1], area.Y[2]),
+        (area.X[2], area.Y[1]), (area.X[2], area.Y[2]),
+    ]
+    projected = ArchGDAL.reproject(corners, _WGS84_LONLAT, target_crs)
+    xs = first.(projected);  ys = last.(projected)
+    return Extent(X = (minimum(xs), maximum(xs)), Y = (minimum(ys), maximum(ys)))
+end
+
 # Reduce each depth-bin raster to one value (single uniform profile, not per-pixel).
-function _texture_values_from_paths(paths, area::Extent, var::TextureVariable)
-    map(paths) do path
-        window = read(crop(Raster(path; name = native_field(var), lazy = true); to = area, touches = true))
+# `getraster` gives a Vector of tile paths per depth; mosaic them into one Raster.
+function _texture_values_from_paths(depth_tile_paths, area::Extent, var::TextureVariable)
+    map(depth_tile_paths) do tile_paths
+        rasters = Raster.(tile_paths; name = native_field(var), lazy = true)
+        r = length(rasters) == 1 ? only(rasters) : mosaic(first, rasters)
+        projected_area = _reproject_extent(area, crs(r))
+        window = read(crop(r; to = projected_area, touches = true))
         var.transform(mean(skipmissing(window))) * var.unit
     end
 end
@@ -31,28 +53,19 @@ function _load_soil_texture_native(::Type{SoilGrids}, area::Extent; quantile = "
     vars = texture_variables(SoilGrids)
     depth_bins = collect(depths(SoilGrids))  # getraster's depth::AbstractArray dispatch needs a Vector, not a Tuple
     values = map(vars) do var
-        paths = getraster(SoilGrids, native_field(var); depth = depth_bins, quantile)
+        paths = getraster(SoilGrids, native_field(var); extent = area, depth = depth_bins, quantile)
         _texture_values_from_paths(paths, area, var)
     end
     return NamedTuple{map(canonical_name, vars)}(values)
 end
 
-# ISRIC's point REST API -- a different endpoint from the raster VRTs.
-function _load_soil_texture_native(::Type{SoilGrids}, lon::Real, lat::Real; quantile = "mean")
-    vars = texture_variables(SoilGrids)
-    depth_bins = depths(SoilGrids)
-    values = map(vars) do var
-        map(depth_bins) do depth
-            point = PointDataSources.getpoint(SoilGrids, native_field(var); lon, lat, depth, quantile)
-            _check_soilgrids_units(var, point.units)
-            var.transform(point.value) * var.unit
-        end
-    end
-    return NamedTuple{map(canonical_name, vars)}(values)
-end
+# Point queries reuse the extent-based path with a small buffer around (lon, lat).
+const _SOILGRIDS_POINT_BUFFER_DEG = 0.005  # ~550 m at the equator -- bigger than one 250 m pixel
 
-function _check_soilgrids_units(::TextureVariable{Name}, units::AbstractString) where {Name}
-    Name === :bulk_density && !occursin("cg", units) && !occursin("g/cm", units) &&
-        @warn "SoilGrids point API returned unexpected units \"$units\" for bulk density; expected cg/cm^3."
-    return nothing
+function _load_soil_texture_native(::Type{SoilGrids}, lon::Real, lat::Real; quantile = "mean")
+    area = Extent(
+        X = (lon - _SOILGRIDS_POINT_BUFFER_DEG, lon + _SOILGRIDS_POINT_BUFFER_DEG),
+        Y = (lat - _SOILGRIDS_POINT_BUFFER_DEG, lat + _SOILGRIDS_POINT_BUFFER_DEG),
+    )
+    return _load_soil_texture_native(SoilGrids, area; quantile)
 end
