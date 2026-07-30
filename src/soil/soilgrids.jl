@@ -38,9 +38,11 @@ function _reproject_extent(area::Extent, target_crs)
 end
 
 # Reduce each depth-bin raster to one value (single uniform profile, not per-pixel).
-function _texture_values_from_paths(paths, area::Extent, var::TextureVariable)
-    map(paths) do path
-        r = Raster(path; name = native_field(var), lazy = true)
+# `getraster` gives a Vector of tile paths per depth; mosaic them into one Raster.
+function _texture_values_from_paths(depth_tile_paths, area::Extent, var::TextureVariable)
+    map(depth_tile_paths) do tile_paths
+        rasters = Raster.(tile_paths; name = native_field(var), lazy = true)
+        r = length(rasters) == 1 ? only(rasters) : mosaic(first, rasters)
         projected_area = _reproject_extent(area, crs(r))
         window = read(crop(r; to = projected_area, touches = true))
         var.transform(mean(skipmissing(window))) * var.unit
@@ -51,28 +53,19 @@ function _load_soil_texture_native(::Type{SoilGrids}, area::Extent; quantile = "
     vars = texture_variables(SoilGrids)
     depth_bins = collect(depths(SoilGrids))  # getraster's depth::AbstractArray dispatch needs a Vector, not a Tuple
     values = map(vars) do var
-        paths = getraster(SoilGrids, native_field(var); depth = depth_bins, quantile)
+        paths = getraster(SoilGrids, native_field(var); extent = area, depth = depth_bins, quantile)
         _texture_values_from_paths(paths, area, var)
     end
     return NamedTuple{map(canonical_name, vars)}(values)
 end
 
-# ISRIC's point REST API -- a different endpoint from the raster VRTs.
-function _load_soil_texture_native(::Type{SoilGrids}, lon::Real, lat::Real; quantile = "mean")
-    vars = texture_variables(SoilGrids)
-    depth_bins = depths(SoilGrids)
-    values = map(vars) do var
-        map(depth_bins) do depth
-            point = PointDataSources.getpoint(SoilGrids, native_field(var); lon, lat, depth, quantile)
-            _check_soilgrids_units(var, point.units)
-            var.transform(point.value) * var.unit
-        end
-    end
-    return NamedTuple{map(canonical_name, vars)}(values)
-end
+# Point queries reuse the extent-based path with a small buffer around (lon, lat).
+const _SOILGRIDS_POINT_BUFFER_DEG = 0.005  # ~550 m at the equator -- bigger than one 250 m pixel
 
-function _check_soilgrids_units(::TextureVariable{Name}, units::AbstractString) where {Name}
-    Name === :bulk_density && !occursin("cg", units) && !occursin("g/cm", units) &&
-        @warn "SoilGrids point API returned unexpected units \"$units\" for bulk density; expected cg/cm^3."
-    return nothing
+function _load_soil_texture_native(::Type{SoilGrids}, lon::Real, lat::Real; quantile = "mean")
+    area = Extent(
+        X = (lon - _SOILGRIDS_POINT_BUFFER_DEG, lon + _SOILGRIDS_POINT_BUFFER_DEG),
+        Y = (lat - _SOILGRIDS_POINT_BUFFER_DEG, lat + _SOILGRIDS_POINT_BUFFER_DEG),
+    )
+    return _load_soil_texture_native(SoilGrids, area; quantile)
 end

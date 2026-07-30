@@ -22,6 +22,7 @@ using RasterDataSources
 using PointDataSources
 using NCDatasets       # triggers Rasters NCDatasets extension for NetCDF support
 using ArchGDAL         # triggers Rasters ArchGDAL extension for GeoTIFF support
+using Proj             # triggers RasterDataSources Proj extension for SoilGrids tile selection
 # ZarrDatasets activates Rasters' Zarr extension for ARCO-ERA5 — currently
 # blocked by a JSON version conflict with the user's dev RasterDataSources
 # checkout. Until that's resolved, users running ERA5 should add
