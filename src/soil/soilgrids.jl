@@ -19,20 +19,19 @@ texture_variables(::Type{SoilGrids}) = (
     TextureVariable(:sand, :sand, 1, raw -> raw / 10),
 )
 
-# `area` is plain lon/lat degrees; SoilGrids/SLGA rasters use a projected CRS
-# (metres) -- reproject before cropping or the degree values get read as
-# metres in the raster's own CRS, silently cropping the wrong location.
-# Source CRS given as a raw proj string, not EPSG(4326): GDAL's EPSG:4326
-# means official (lat, lon) axis order, not (lon, lat) -- a proj string is
-# unambiguous.
+# `area` is plain lon/lat degrees; reproject before cropping against a
+# raster's own CRS. Target is routed through PROJ4 (traditional x,y order) --
+# some CRS WKT (e.g. SLGA's WGS84) declare authority axis order (lat, lon),
+# which would otherwise silently swap X/Y.
 const _WGS84_LONLAT = ProjString("+proj=longlat +datum=WGS84 +no_defs")
 
 function _reproject_extent(area::Extent, target_crs)
+    target_proj4 = ProjString(ArchGDAL.toPROJ4(ArchGDAL.importCRS(target_crs)))
     corners = [
         (area.X[1], area.Y[1]), (area.X[1], area.Y[2]),
         (area.X[2], area.Y[1]), (area.X[2], area.Y[2]),
     ]
-    projected = ArchGDAL.reproject(corners, _WGS84_LONLAT, target_crs)
+    projected = ArchGDAL.reproject(corners, _WGS84_LONLAT, target_proj4)
     xs = first.(projected);  ys = last.(projected)
     return Extent(X = (minimum(xs), maximum(xs)), Y = (minimum(ys), maximum(ys)))
 end
