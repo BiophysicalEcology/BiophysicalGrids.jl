@@ -38,11 +38,16 @@ function _reproject_extent(area::Extent, target_crs)
 end
 
 # Reduce each depth-bin raster to one value (single uniform profile, not per-pixel).
-# `getraster` gives a Vector of tile paths per depth; mosaic them into one Raster.
+# Per depth, `tile_paths` is either one file path (single-file sources) or a
+# Vector of tile paths to mosaic (tiled sources).
 function _texture_values_from_paths(depth_tile_paths, area::Extent, var::TextureVariable)
     map(depth_tile_paths) do tile_paths
-        rasters = Raster.(tile_paths; name = native_field(var), lazy = true)
-        r = length(rasters) == 1 ? only(rasters) : mosaic(first, rasters)
+        r = if tile_paths isa AbstractString
+            Raster(tile_paths; name = native_field(var), lazy = true)
+        else
+            rasters = Raster.(tile_paths; name = native_field(var), lazy = true)
+            length(rasters) == 1 ? only(rasters) : mosaic(first, rasters)
+        end
         projected_area = _reproject_extent(area, crs(r))
         window = read(crop(r; to = projected_area, touches = true))
         var.transform(mean(skipmissing(window))) * var.unit
