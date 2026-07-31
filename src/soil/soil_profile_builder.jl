@@ -79,7 +79,7 @@ end
 
 Fetch soil texture for `source` (`SoilGrids` or `SLGA`) over `area_or_point`
 (an `Extent`, spatially averaged into one uniform profile; or `(lon, lat)`
-for a point query, `SoilGrids` only), interpolate onto `depths`, run
+for a point query, buffered into a small `Extent`), interpolate onto `depths`, run
 `pedotransfer_model`, and assemble a `SoilProfile`.
 
 `mineral_density`/`mineral_conductivity`/`mineral_heat_capacity`/`root_density`
@@ -106,7 +106,8 @@ function build_soil_profile(::Type{SLGA}, area::Extent; component = "EV", kw...)
     return _assemble_soil_profile(native; kw...)
 end
 
-build_soil_profile(::Type{SLGA}, ::Tuple; kw...) = throw(ArgumentError(
-    "SLGA has no point-query API in PointDataSources.jl -- pass an Extent " *
-    "(a small area around the point) instead of (lon, lat), or use SoilGrids for point queries."
-))
+function build_soil_profile(::Type{SLGA}, point::Tuple{<:Real, <:Real}; component = "EV", kw...)
+    lon, lat = point
+    native = _load_soil_texture_native(SLGA, lon, lat; component)
+    return _assemble_soil_profile(native; kw...)
+end

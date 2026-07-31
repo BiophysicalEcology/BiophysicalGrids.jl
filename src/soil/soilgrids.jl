@@ -65,12 +65,13 @@ function _load_soil_texture_native(::Type{SoilGrids}, area::Extent; quantile = "
 end
 
 # Point queries reuse the extent-based path with a small buffer around (lon, lat).
-const _SOILGRIDS_POINT_BUFFER_DEG = 0.005  # ~550 m at the equator -- bigger than one 250 m pixel
+# Shared with SLGA's point method in slga.jl -- bigger than one pixel for either source.
+const _SOIL_POINT_BUFFER_DEG = 0.005  # ~550 m at the equator
 
 function _load_soil_texture_native(::Type{SoilGrids}, lon::Real, lat::Real; quantile = "mean")
     area = Extent(
-        X = (lon - _SOILGRIDS_POINT_BUFFER_DEG, lon + _SOILGRIDS_POINT_BUFFER_DEG),
-        Y = (lat - _SOILGRIDS_POINT_BUFFER_DEG, lat + _SOILGRIDS_POINT_BUFFER_DEG),
+        X = (lon - _SOIL_POINT_BUFFER_DEG, lon + _SOIL_POINT_BUFFER_DEG),
+        Y = (lat - _SOIL_POINT_BUFFER_DEG, lat + _SOIL_POINT_BUFFER_DEG),
     )
     return _load_soil_texture_native(SoilGrids, area; quantile)
 end
