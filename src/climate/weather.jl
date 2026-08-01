@@ -162,6 +162,9 @@ end
 # ---------------------------------------------------------------------------
 
 @inline layers(source) = map(canonical_name, variables(source))
+# Variables usable for init-only seeding (e.g. ERA5's soil layers, not part
+# of its regular per-timestep `variables()`). Defaults to `variables(source)`.
+@inline init_variables(source) = variables(source)
 @inline fallback_source(::Type) = nothing
 # A source's fallback layers are exactly the baseline's layers it does not
 # provide itself, so they follow from `variables` and `fallback_source`.
@@ -389,9 +392,16 @@ _contiguous_series_coords(url) = error(
     "loading a ContiguousTimeSeries source (e.g. ERA5) requires `using ZarrDatasets`",
 )
 
+# `RasterStack(url; source=Zarrsource())`'s field discovery misses most of
+# this store's arrays, so named variables are opened directly instead —
+# see ext/MicroclimateMapperZarrExt.
+function _contiguous_series_open end
+_contiguous_series_open(url, long_name) = error(
+    "loading a ContiguousTimeSeries source (e.g. ERA5) requires `using ZarrDatasets`",
+)
+
 function _load_contiguous_series(source, fields::Tuple, area::Extent, time_start::DateTime, time_end::DateTime)
     cloud_source = getraster(source)
-    full_stack = RasterStack(cloud_source.url; source = Rasters.Zarrsource(), lazy = true)
     coords = _contiguous_series_coords(cloud_source.url)
 
     hstart = Dates.value(time_start - coords.epoch) ÷ 3_600_000
@@ -407,9 +417,9 @@ function _load_contiguous_series(source, fields::Tuple, area::Extent, time_start
     layers = map(fields) do name
         @info "  loading $source $name..."
         long_name = layername(source, name)
-        raw = getproperty(full_stack, Symbol(long_name))
-        data = read(view(raw, X(xi), Y(yi), Ti(ti)))
-        Raster(parent(data), (X(xs), Y(ys), Ti(1:length(ti))); crs = EPSG(4326), name)
+        raw = _contiguous_series_open(cloud_source.url, long_name)
+        data = raw[xi, yi, ti]
+        Raster(data, (X(xs), Y(ys), Ti(1:length(ti))); crs = EPSG(4326), name)
     end
     return NamedTuple{fields}(layers)
 end
@@ -747,6 +757,28 @@ function _load_prescribed(source, sample::Sample, area::Extent, years)
     var = _variable_for(variables(source), name)
     converted = ustrip.(canonical_unit(name), var.transform.(parent(raw)) .* var.unit)
     return Raster(converted, dims(raw); crs = crs(raw))
+end
+
+# Cheap single-snapshot (X, Y) grid near `start_date`, for seeding initial
+# conditions from a source that isn't the run's `weather_source` (e.g. ERA5
+# seeding an NCEP/AWAP/SILO run). Not a time-varying forcing: a
+# ContiguousTimeSeries source is read for a single hour (see
+# _load_contiguous_series); other loaders read a single year.
+function _load_init_snapshot(source, sample::Sample, area::Extent, start_date::Date)
+    name = canonical_name(sample)
+    var = _variable_for(init_variables(source), name)
+    field = native_field(var)
+    raw2d = if loader(source) isa ContiguousTimeSeries
+        t0 = DateTime(start_date)
+        first(values(_load_contiguous_series(source, (field,), area, t0, t0 + Hour(1))))[Ti(1)]
+    else
+        yr = year(start_date)
+        first(values(_load_layers(loader(source), source, (field,), area, yr:yr)))[Ti(1)]
+    end
+    raw2d = Rasters.replace_missing(raw2d, NaN)
+    # Kept Unitful, unlike _load_prescribed's ustrip -- MicroInputs wants Unitful K.
+    converted = var.transform.(parent(raw2d)) .* var.unit
+    return Raster(converted, dims(raw2d); crs = crs(raw2d))
 end
 
 # ---------------------------------------------------------------------------
