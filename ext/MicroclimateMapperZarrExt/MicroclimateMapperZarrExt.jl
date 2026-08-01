@@ -14,4 +14,10 @@ function MicroclimateMapper._contiguous_series_coords(url::AbstractString)
     (; hours = hours_arr[:], epoch, lat = lat_arr[:], lon = lon_arr[:])
 end
 
+# `RasterStack(url; source=Zarrsource())`'s consolidated-metadata discovery
+# only surfaces a subset of this store's ~280 arrays, so named variables are
+# opened directly by their store subpath instead.
+MicroclimateMapper._contiguous_series_open(url::AbstractString, long_name::AbstractString) =
+    Zarr.zopen(url * "/" * long_name)
+
 end

@@ -20,3 +20,11 @@ function variables(::Type{<:ERA5})
         Variable(Rainfall(), :tp, u"kg/m^2", raw -> raw * 1000.0),
     )
 end
+
+# Not part of `variables()` (would pull the full requested Ti range at
+# every timestep) -- only used by `_load_init_snapshot` for init seeding.
+init_variables(::Type{<:ERA5}) = (
+    variables(ERA5)...,
+    Variable(SoilTemperature(Mean()), :stl1, u"K"),
+    Variable(SoilMoisture(), :swvl1, 1),
+)

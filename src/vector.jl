@@ -205,7 +205,7 @@ worker-cache pool, and prepare for `solve!`. No resampling is performed.
 function CommonSolve.init(problem::MicroVectorProblem)
     (; model, points, dates, soil_profile, data) = problem
     (; dem_source, weather_source, landcover_source,
-       surface_albedo_source, roughness_height_source, soil_moisture_source) = model
+       surface_albedo_source, roughness_height_source, soil_moisture_source, init_source) = model
 
     dates_vec = _normalise_dates(dates)
     years = _years_from_dates(dates)
@@ -237,6 +237,16 @@ function CommonSolve.init(problem::MicroVectorProblem)
 
     area = _points_extent(points)
     points_dim = _make_points_dim(points)
+
+    init_soil_native = model.solar_only ? (; soil_temperature = nothing, soil_moisture = nothing) :
+        _load_init_soil(init_source,
+            Extents.buffer(area, (X = _POINTS_LOAD_BUFFER, Y = _POINTS_LOAD_BUFFER)), first(dates_vec))
+    init_soil = (;
+        soil_temperature = init_soil_native.soil_temperature === nothing ?
+            nothing : _to_points(init_soil_native.soil_temperature, points_dim),
+        soil_moisture = init_soil_native.soil_moisture === nothing ?
+            nothing : _to_points(init_soil_native.soil_moisture, points_dim),
+    )
 
     # Terrain: reuse pre-computed terrain when `data.terrain` is supplied
     # (skips DEM download and horizon-angle sweep). The override must already
@@ -293,7 +303,7 @@ function CommonSolve.init(problem::MicroVectorProblem)
         model, weather_source, weather, terrain, mask,
         albedo_grid, roughness_grid, canonical_overrides,
         init_inputs, soil_moisture_available, years, days = days_doy, cloud_constants,
-        soil_profile, target_timestep = target,
+        soil_profile, target_timestep = target, init_soil,
     )
 
     return MicroMapCache(
