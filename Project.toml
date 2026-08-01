@@ -37,6 +37,7 @@ UnitfulMoles = "999f2bd7-36bf-5ba7-9bc1-c9473aa75374"
 
 [weakdeps]
 Makie = "ee78f7c6-11fb-53f2-987a-cfe4a2b5a57a"
+ZarrDatasets = "519a4cdf-1362-424a-9ea1-b1d782dbb24b"
 
 [sources]
 BiophysicalGeometry = {rev = "main", url = "https://github.com/BiophysicalEcology/BiophysicalGeometry.jl"}
@@ -50,6 +51,7 @@ SolarRadiation = {rev = "main", url = "https://github.com/BiophysicalEcology/Sol
 
 [extensions]
 MicroclimateMapperMakieExt = "Makie"
+MicroclimateMapperZarrExt = "ZarrDatasets"
 
 [compat]
 Aqua = "0.8"
@@ -87,6 +89,7 @@ Test = "1"
 URIs = "1"
 Unitful = "1"
 UnitfulMoles = "0.1"
+ZarrDatasets = "0.1"
 julia = "1"
 
 [extras]

@@ -381,23 +381,79 @@ function _load_layers(::DailyFiles, source, fields::Tuple, area::Extent, years)
     end
     return NamedTuple{fields}(layers)
 end
-function _load_layers(::ContiguousTimeSeries, source, fields::Tuple, area::Extent, years)
+# ARCO-ERA5's Zarr dims come back as bare integer NoLookups (no real
+# coordinate values), so coordinates are read directly from the store —
+# see ext/MicroclimateMapperZarrExt.
+function _contiguous_series_coords end
+_contiguous_series_coords(url) = error(
+    "loading a ContiguousTimeSeries source (e.g. ERA5) requires `using ZarrDatasets`",
+)
+
+function _load_contiguous_series(source, fields::Tuple, area::Extent, time_start::DateTime, time_end::DateTime)
     cloud_source = getraster(source)
     full_stack = RasterStack(cloud_source.url; source = Rasters.Zarrsource(), lazy = true)
-    time_start = DateTime(first(years), 1, 1, 0)
-    time_end = DateTime(last(years), 12, 31, 23)
+    coords = _contiguous_series_coords(cloud_source.url)
+
+    hstart = Dates.value(time_start - coords.epoch) ÷ 3_600_000
+    hend = Dates.value(time_end - coords.epoch) ÷ 3_600_000
+    ti = searchsortedfirst(coords.hours, hstart):searchsortedlast(coords.hours, hend)
+
+    # Longitude is stored 0..360; latitude is stored descending 90..-90.
+    lon360(x) = mod(x, 360)
+    xi = findfirst(>=(lon360(area.X[1])), coords.lon):findlast(<=(lon360(area.X[2])), coords.lon)
+    yi = findfirst(<=(area.Y[2]), coords.lat):findlast(>=(area.Y[1]), coords.lat)
+    xs, ys = coords.lon[xi], coords.lat[yi]
+
     layers = map(fields) do name
         @info "  loading $source $name..."
         long_name = layername(source, name)
         raw = getproperty(full_stack, Symbol(long_name))
-        read(view(raw,
-            X(area.X[1] .. area.X[2]),
-            Y(area.Y[1] .. area.Y[2]),
-            Ti(time_start .. time_end),
-        ))
+        data = read(view(raw, X(xi), Y(yi), Ti(ti)))
+        Raster(parent(data), (X(xs), Y(ys), Ti(1:length(ti))); crs = EPSG(4326), name)
     end
     return NamedTuple{fields}(layers)
 end
+
+function _load_layers(::ContiguousTimeSeries, source, fields::Tuple, area::Extent, years)
+    time_start = DateTime(first(years), 1, 1, 0)
+    time_end = DateTime(last(years), 12, 31, 23)
+    _load_contiguous_series(source, fields, area, time_start, time_end)
+end
+
+"""
+    prefetch_weather!(source, points, dates; fields = layers(source), batch = Week(1))
+
+Download and cache `source` weather data for `points`' bounding area and
+`dates`, one `batch`-sized NetCDF file at a time under
+`RasterDataSources.rasterpath(source)/prefetch`. Skips batches already
+cached, so a re-run resumes where it left off.
+"""
+function prefetch_weather!(source::Type, points, dates; fields = layers(source), batch = Week(1))
+    area = Extents.buffer(_points_extent(points), (X = _POINTS_LOAD_BUFFER, Y = _POINTS_LOAD_BUFFER))
+    date_start, date_end = extrema(dates)
+    cache_dir = joinpath(RasterDataSources.rasterpath(source), "prefetch")
+    mkpath(cache_dir)
+
+    for b0 in date_start:batch:date_end
+        b1 = min(b0 + batch - Day(1), date_end)
+        path = _prefetch_path(cache_dir, fields, area, b0, b1)
+        if isfile(path)
+            @info "prefetch: $b0 to $b1 already cached"
+            continue
+        end
+        @info "prefetch: downloading $b0 to $b1..."
+        stack = RasterStack(_load_contiguous_series(source, fields, area,
+            DateTime(b0), DateTime(b1) + Day(1) - Second(1)))
+        write(path, stack)
+    end
+    return cache_dir
+end
+
+_prefetch_path(dir, fields, area, b0, b1) = joinpath(dir,
+    "$(join(fields, '-'))_" *
+    "$(round(area.X[1]; digits = 2))_$(round(area.X[2]; digits = 2))_" *
+    "$(round(area.Y[1]; digits = 2))_$(round(area.Y[2]; digits = 2))_" *
+    "$(Dates.format(b0, "yyyymmdd"))_$(Dates.format(b1, "yyyymmdd")).nc")
 
 function _load_field_at_points(source, name, points_dim; kw...)
     lazy_r = Raster(source, name; lazy = true, kw...)
