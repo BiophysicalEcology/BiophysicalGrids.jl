@@ -49,6 +49,7 @@ per-run data overrides.
       canonical weather-variable name (e.g. `vapour_pressure_deficit`,
       `mean_temperature`, `cloud_cover`). Each as a `Raster` in canonical
       units; resampled to the run template automatically.
+    * `shade` — fraction (0–1) of shade cast over the site; default 0.
 """
 @kwdef struct MicroRasterProblem{M<:MicroMapModel,A,DT<:Union{Date,AbstractRange{Date}},T,SP<:SoilProfile,IT,D<:NamedTuple,TC<:Timestep}
     model::M
@@ -196,7 +197,7 @@ worker-cache pool, and prepare for `solve!`.
 function CommonSolve.init(problem::MicroRasterProblem)
     (; model, area, dates, soil_profile, data) = problem
     (; dem_source, weather_source, landcover_source,
-       surface_albedo_source, roughness_height_source, soil_moisture_source) = model
+       surface_albedo_source, roughness_height_source, soil_moisture_source, init_source) = model
 
     # Inject soil_moisture_source into data before canonical-override resolution,
     # unless the user already supplied data.soil_moisture explicitly.
@@ -222,6 +223,8 @@ function CommonSolve.init(problem::MicroRasterProblem)
 
     # `area` may be a geometry; loaders need an Extent, but the mask uses the geometry itself.
     extent = _to_extent(area)
+    init_soil_native = model.solar_only ? (; soil_temperature = nothing, soil_moisture = nothing) :
+        _load_init_soil(init_source, extent, first(dates_vec))
     @info "init: weather source:   $(weather_source) ($(nameof(typeof(calendar))), $(nameof(typeof(native))) → $(nameof(typeof(target))))"
     @info "init: DEM source:       $(haskey(data, :terrain) ? "skipped (terrain override)" : string(dem_source))"
     @info "init: surface albedo:   $(_source_label(surface_albedo_source))"
@@ -280,6 +283,12 @@ function CommonSolve.init(problem::MicroRasterProblem)
         landcover_source, template, extent, default_landcover_albedo)
     roughness_grid = _resolve_surface_grid(roughness_data, roughness_height_source,
         landcover_source, template, extent, default_landcover_roughness)
+    init_soil = (;
+        soil_temperature = init_soil_native.soil_temperature === nothing ?
+            nothing : Rasters.resample(init_soil_native.soil_temperature; to = template, method = :average),
+        soil_moisture = init_soil_native.soil_moisture === nothing ?
+            nothing : Rasters.resample(init_soil_native.soil_moisture; to = template, method = :average),
+    )
 
     canonical_overrides = _resample_canonical_overrides(_canonical_data(data), template)
 
@@ -302,7 +311,7 @@ function CommonSolve.init(problem::MicroRasterProblem)
         model, weather_source, weather, terrain, mask,
         albedo_grid, roughness_grid, canonical_overrides,
         init_inputs, soil_moisture_available, years, days = days_doy, cloud_constants,
-        soil_profile, target_timestep = target,
+        soil_profile, target_timestep = target, init_soil,
     )
     @info "init: done"
 

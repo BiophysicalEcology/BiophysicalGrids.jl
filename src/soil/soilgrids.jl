@@ -14,15 +14,35 @@ native_field(::TextureVariable{<:Any, Field}) where {Field} = Field
 
 texture_variables(::Type{SoilGrids}) = (
     TextureVariable(:bulk_density, :bdod, u"Mg/m^3", raw -> raw / 100),  # cg/cm^3 -> Mg/m^3
-    TextureVariable(:clay, :clay),  # g/100g already == %
-    TextureVariable(:silt, :silt),
-    TextureVariable(:sand, :sand),
+    TextureVariable(:clay, :clay, 1, raw -> raw / 10),  # g/kg -> g/100g (%)
+    TextureVariable(:silt, :silt, 1, raw -> raw / 10),
+    TextureVariable(:sand, :sand, 1, raw -> raw / 10),
 )
+
+# `area` is plain lon/lat degrees; SoilGrids/SLGA rasters use a projected CRS
+# (metres) -- reproject before cropping or the degree values get read as
+# metres in the raster's own CRS, silently cropping the wrong location.
+# Source CRS given as a raw proj string, not EPSG(4326): GDAL's EPSG:4326
+# means official (lat, lon) axis order, not (lon, lat) -- a proj string is
+# unambiguous.
+const _WGS84_LONLAT = ProjString("+proj=longlat +datum=WGS84 +no_defs")
+
+function _reproject_extent(area::Extent, target_crs)
+    corners = [
+        (area.X[1], area.Y[1]), (area.X[1], area.Y[2]),
+        (area.X[2], area.Y[1]), (area.X[2], area.Y[2]),
+    ]
+    projected = ArchGDAL.reproject(corners, _WGS84_LONLAT, target_crs)
+    xs = first.(projected);  ys = last.(projected)
+    return Extent(X = (minimum(xs), maximum(xs)), Y = (minimum(ys), maximum(ys)))
+end
 
 # Reduce each depth-bin raster to one value (single uniform profile, not per-pixel).
 function _texture_values_from_paths(paths, area::Extent, var::TextureVariable)
     map(paths) do path
-        window = read(crop(Raster(path; name = native_field(var), lazy = true); to = area, touches = true))
+        r = Raster(path; name = native_field(var), lazy = true)
+        projected_area = _reproject_extent(area, crs(r))
+        window = read(crop(r; to = projected_area, touches = true))
         var.transform(mean(skipmissing(window))) * var.unit
     end
 end

@@ -13,6 +13,8 @@ weather_calendar(::Type{<:SILO}) = Daily()
 loader(::Type{<:SILO}) = YearlyTimeSeries()
 fallback_source(::Type{<:SILO}) = CRUCL2
 fallback_layers(::Type{<:SILO}) = (:wind_speed,)
+# SILO's DataDrill API requires an email address.
+_extra_getpoint_kwargs(::Type{<:SILO}) = (; username = get(ENV, "SILO_EMAIL", ""))
 
 function variables(::Type{<:SILO})
     (

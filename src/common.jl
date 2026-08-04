@@ -36,6 +36,7 @@ LayerSpec(name::Symbol, kind::Symbol) = LayerSpec{name, kind}()
 
 @inline _layer_name(::LayerSpec{N}) where N = N
 @inline _layer_source(result, ::LayerSpec{N, :profile}) where N = getproperty(result.profile, N)
+@inline _layer_source(result, ::LayerSpec{N, :solar}) where N = getproperty(result.solar_radiation, N)
 @inline _layer_source(result, ::LayerSpec{N}) where N = getproperty(result, N)
 
 const _DEFAULT_OUTPUT_LAYERS = (
@@ -117,6 +118,10 @@ extents and time ranges — pair with a `MicroRasterProblem` (grid) or
   (e.g. `CPCSoil`). Loaded automatically at `init` time and used as
   time-varying prescribed soil moisture. Overridden by `data.soil_moisture`
   if both are supplied.
+- `init_source` — optional data-source type (e.g. `ERA5`) for seeding
+  initial soil temperature/moisture from a single start-date snapshot, not
+  a time-varying forcing. Lowest precedence: `init`, `data`, and
+  `weather_source`/`soil_moisture_source` all override it.
 - `lapse_rate_model::LapseRate` — atmospheric lapse-rate model for
   elevation-correcting weather data
 - `solar_only::Bool` — when `true`, skip the microclimate ODE and return
@@ -127,7 +132,7 @@ extents and time ranges — pair with a `MicroRasterProblem` (grid) or
   output. Each layer may request broadband or a waveband integral. Predefined
   constants: `SOLAR_BROADBAND`, `SOLAR_PAR`, `SOLAR_UVB`, `SOLAR_NIR`.
 """
-@kwdef struct MicroMapModel{MM,DS,WS,LCS,SAS,RHS,SMS,OL,LRT,SOL}
+@kwdef struct MicroMapModel{MM,DS,WS,LCS,SAS,RHS,SMS,IS,OL,LRT,SOL}
     micro_model::MM
     dem_source::DS
     weather_source::WS
@@ -135,6 +140,7 @@ extents and time ranges — pair with a `MicroRasterProblem` (grid) or
     surface_albedo_source::SAS = nothing
     roughness_height_source::RHS = nothing
     soil_moisture_source::SMS = nothing
+    init_source::IS = nothing
     output_layers::OL = _DEFAULT_OUTPUT_LAYERS
     lapse_rate_model::LRT = EnvironmentalLapseRate()
     compute_terrain::Bool = true
@@ -224,20 +230,24 @@ function _has_canonical_input(name::Symbol, weather_source, data::NamedTuple)
     return false
 end
 
-# Per-pixel `initial_soil_moisture` resolution.
-#  - User-supplied vector wins.
-#  - Otherwise read the first timestep of `buffers.soil_moisture` and
-#    broadcast across depths (TerraClimate-style rooting-zone average).
-#  - If neither is available, refuse to fabricate.
-_initial_soil_moisture(user::AbstractVector, _, _, _) = user
-function _initial_soil_moisture(::Nothing, buffer, available::Bool, depths)
-    available || error(
+# Per-pixel initial soil moisture/temperature resolution. Precedence:
+# user-supplied vector > weather source's first timestep > init_source
+# snapshot > (moisture: error: temperature: nothing, i.e. inner default).
+_initial_soil_moisture(user::AbstractVector, _, _, _, _) = user
+function _initial_soil_moisture(::Nothing, buffer, available::Bool, depths, init_soil_moisture)
+    available && return fill(buffer[1], length(depths))
+    init_soil_moisture !== nothing && return fill(init_soil_moisture, length(depths))
+    error(
         "No soil_moisture available. Either: pass `init = (; soil_moisture = vec)`, " *
         "use a weather source that provides it as a canonical variable (e.g. TerraClimate), " *
-        "or supply `data.soil_moisture` on the problem."
+        "supply `data.soil_moisture` on the problem, or set `model.init_source`."
     )
-    return fill(buffer[1], length(depths))
 end
+
+_initial_soil_temperature(user::AbstractVector, _, _) = user
+_initial_soil_temperature(::Nothing, ::Nothing, _) = nothing
+_initial_soil_temperature(::Nothing, init_soil_temperature, depths) =
+    fill(init_soil_temperature, length(depths))
 
 # Source-loading helpers (override beats loader). Mode-agnostic: both grid
 # and points init build their own `area::Extent` (rectangular for grid;
@@ -247,6 +257,19 @@ _resolve_dem(data::NamedTuple, source, area) =
 
 _resolve_weather(data::NamedTuple, source, area, years) =
     haskey(data, :weather) ? data.weather : _load_weather(source, area, years)
+
+# init_source: cheap (X, Y) snapshot of soil temperature/moisture near
+# `start_date`, for whichever of the two `init_source` actually declares.
+_load_init_soil(::Nothing, _area, _start_date) =
+    (; soil_temperature = nothing, soil_moisture = nothing)
+function _load_init_soil(init_source, area::Extent, start_date::Date)
+    vars = init_variables(init_source)
+    soil_temperature = _maybe_variable(vars, :deep_soil_temperature) === nothing ? nothing :
+        _load_init_snapshot(init_source, SoilTemperature(Mean()), area, start_date)
+    soil_moisture = _maybe_variable(vars, :soil_moisture) === nothing ? nothing :
+        _load_init_snapshot(init_source, SoilMoisture(), area, start_date)
+    return (; soil_temperature, soil_moisture)
+end
 
 # Normalise `area` to an Extent for loaders; geometry is kept separately for the mask.
 _to_extent(area::Extent) = area
@@ -356,6 +379,7 @@ function _build_inputs_and_pool(;
     albedo_grid, roughness_grid, canonical_overrides,
     init_inputs, soil_moisture_available, years, days, cloud_constants,
     soil_profile, target_timestep::Timestep = Hourly(),
+    init_soil = (; soil_temperature = nothing, soil_moisture = nothing),
 )
     (; micro_model, lapse_rate_model) = model
     vapour_pressure_method = micro_model.vapour_pressure_equation
@@ -426,6 +450,12 @@ function _build_inputs_and_pool(;
         initial_soil_moisture = _initial_soil_moisture(
             init_inputs.soil_moisture, scratch.weather.soil_moisture,
             soil_moisture_available, micro_model.depths,
+            init_soil.soil_moisture === nothing ? nothing : init_soil.soil_moisture[I...],
+        )
+        initial_soil_temperature = _initial_soil_temperature(
+            init_inputs.soil_temperature,
+            init_soil.soil_temperature === nothing ? nothing : init_soil.soil_temperature[I...],
+            micro_model.depths,
         )
         # Snow init: fall back to MicroInputs' own defaults when the user
         # didn't supply a value. `initial_snow_density = nothing` is the
@@ -433,7 +463,7 @@ function _build_inputs_and_pool(;
         # through unchanged.
         MicroInputs(; site, soil_profile,
             env.environment_minmax, env.environment_daily, env.environment_hourly,
-            initial_soil_temperature = init_inputs.soil_temperature,
+            initial_soil_temperature,
             initial_soil_moisture,
             initial_snow_depth = something(init_inputs.snow_depth, 0.0u"cm"),
             initial_snow_temperature = something(init_inputs.snow_temperature, u"K"(0.0u"°C")),
@@ -659,8 +689,6 @@ function _compute_solar_for_pixel!(scratch, terrain, albedo_grid, I)
     return nothing
 end
 
-# Return the native weather field name that maps to canonical :cloud_cover,
-# or `nothing` when the source does not provide cloud cover.
 # Return the Variable for :cloud_cover (carries native field name +
 # transform), or nothing if the source does not provide cloud cover.
 function _cloud_weather_variable(weather_source)
@@ -678,7 +706,7 @@ end
 # regardless of whether the native field is already in [0,1] or needs
 # conversion (e.g. CRUCL2 stores sunshine % via transform (100-s)/100).
 function _fill_cloud_factors!(factors, weather, cloud_var::Variable, I, nhours_per_step)
-    cloud_layer = getproperty(weather, native_field(cloud_var))
+    cloud_layer = getproperty(weather, canonical_name(cloud_var))
     n_weather = length(lookup(cloud_layer, Ti))
     k = 1
     for d in 1:n_weather
@@ -707,7 +735,7 @@ function _solve_solar_only!(solar_output, cache, solar_pairs)
         cloud_var !== nothing && !isempty(cache.weather)
     nsteps = size(first(values(solar_output)), Ti)
     nhours_per_step = if cloud_correct
-        n_weather = length(lookup(getproperty(cache.weather, native_field(cloud_var)), Ti))
+        n_weather = length(lookup(getproperty(cache.weather, canonical_name(cloud_var)), Ti))
         nsteps ÷ n_weather
     else
         0
@@ -780,6 +808,7 @@ function _allocate_output(model::MicroModel, terrain, proto, layers::Tuple,
         soil = (ti, Dim{:depth}(ustrip.(u"m", model.depths))),
         profile = (ti, Dim{:height}(ustrip.(u"m", model.heights))),
         scalar = (ti,),
+        solar = (ti,),
     )
     return RasterStack(NamedTuple(map(layers) do spec
         _layer_name(spec) => _allocate_layer(proto, spec, spatial_dims, extra, mask)
