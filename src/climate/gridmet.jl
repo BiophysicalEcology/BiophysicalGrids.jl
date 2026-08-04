@@ -13,7 +13,7 @@ function variables(::Type{<:GRIDMET})
         Variable(Reference(RelativeHumidity(Minimum())), :rmin, 1, percent_to_fraction),
         Variable(Reference(RelativeHumidity(Maximum())), :rmax, 1, percent_to_fraction),
         Variable(GlobalRadiation(), :srad, u"W/m^2"),
-        # 10 m wind speed — `derive!(:reference_wind_max)` applies the
+        # 10 m wind speed — `derive!(:reference_wind_speed_max)` applies the
         Variable(WindSpeed(), :vs, u"m/s"),
     )
 end

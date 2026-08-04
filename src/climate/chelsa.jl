@@ -20,7 +20,7 @@ function variables(::Type{<:CHELSA{Climate}})
         Variable(Reference(RelativeHumidity(Minimum())), :hurs, 1, percent_to_fraction),
         Variable(Reference(RelativeHumidity(Maximum())), :hurs, 1, percent_to_fraction),
         # `cloud_cover` is native, so the radiation-based cloud derivation
-        # is skipped; cloud_min/max derivations still fire from this value.
+        # is skipped; cloud_cover_min/max derivations still fire from this value.
         Variable(CloudCover(), :clt, 1, percent_to_fraction),
     )
 end

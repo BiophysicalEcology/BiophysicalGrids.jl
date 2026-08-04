@@ -36,6 +36,7 @@ LayerSpec(name::Symbol, kind::Symbol) = LayerSpec{name, kind}()
 
 @inline _layer_name(::LayerSpec{N}) where N = N
 @inline _layer_source(result, ::LayerSpec{N, :profile}) where N = getproperty(result.profile, N)
+@inline _layer_source(result, ::LayerSpec{N, :solar}) where N = getproperty(result.solar_radiation, N)
 @inline _layer_source(result, ::LayerSpec{N}) where N = getproperty(result, N)
 
 const _DEFAULT_OUTPUT_LAYERS = (
@@ -659,8 +660,6 @@ function _compute_solar_for_pixel!(scratch, terrain, albedo_grid, I)
     return nothing
 end
 
-# Return the native weather field name that maps to canonical :cloud_cover,
-# or `nothing` when the source does not provide cloud cover.
 # Return the Variable for :cloud_cover (carries native field name +
 # transform), or nothing if the source does not provide cloud cover.
 function _cloud_weather_variable(weather_source)
@@ -678,7 +677,7 @@ end
 # regardless of whether the native field is already in [0,1] or needs
 # conversion (e.g. CRUCL2 stores sunshine % via transform (100-s)/100).
 function _fill_cloud_factors!(factors, weather, cloud_var::Variable, I, nhours_per_step)
-    cloud_layer = getproperty(weather, native_field(cloud_var))
+    cloud_layer = getproperty(weather, canonical_name(cloud_var))
     n_weather = length(lookup(cloud_layer, Ti))
     k = 1
     for d in 1:n_weather
@@ -707,7 +706,7 @@ function _solve_solar_only!(solar_output, cache, solar_pairs)
         cloud_var !== nothing && !isempty(cache.weather)
     nsteps = size(first(values(solar_output)), Ti)
     nhours_per_step = if cloud_correct
-        n_weather = length(lookup(getproperty(cache.weather, native_field(cloud_var)), Ti))
+        n_weather = length(lookup(getproperty(cache.weather, canonical_name(cloud_var)), Ti))
         nsteps ÷ n_weather
     else
         0
@@ -780,6 +779,7 @@ function _allocate_output(model::MicroModel, terrain, proto, layers::Tuple,
         soil = (ti, Dim{:depth}(ustrip.(u"m", model.depths))),
         profile = (ti, Dim{:height}(ustrip.(u"m", model.heights))),
         scalar = (ti,),
+        solar = (ti,),
     )
     return RasterStack(NamedTuple(map(layers) do spec
         _layer_name(spec) => _allocate_layer(proto, spec, spatial_dims, extra, mask)

@@ -53,6 +53,7 @@ export
     NCEP,
     SurfaceFlux,
     # Microclimate drivers
+    LayerSpec,
     MicroMapModel,
     MicroRasterProblem,
     MicroVectorProblem,
@@ -79,7 +80,9 @@ export
     # Geocoding utilities
     geocode,
     GeocodeResult,
-    load_template
+    load_template,
+    # Weather data pre-fetch/caching
+    prefetch_weather!
 
 include("utils/geocode.jl")
 include("utils/utils.jl")

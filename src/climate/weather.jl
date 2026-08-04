@@ -174,6 +174,14 @@ end
         _names_absent(own, Base.tail(candidates)) :
         (first(candidates), _names_absent(own, Base.tail(candidates))...)
 @inline _extra_getraster_kwargs(::Type) = (;)
+@inline _extra_getpoint_kwargs(::Type) = (;)
+
+# variables(source) alone misses fallback-contributed quantities (e.g. SILO's
+# CRUCL2 wind), so they'd never get copied into buffers.
+@inline _full_variables(source) = _merge_fallback_variables(source, fallback_source(source))
+@inline _merge_fallback_variables(source, ::Nothing) = variables(source)
+@inline _merge_fallback_variables(source, baseline) =
+    (variables(source)..., map(name -> _variable_for(variables(baseline), name), fallback_layers(source))...)
 
 @inline supports_points_loading(::Type) = true
 
@@ -373,23 +381,79 @@ function _load_layers(::DailyFiles, source, fields::Tuple, area::Extent, years)
     end
     return NamedTuple{fields}(layers)
 end
-function _load_layers(::ContiguousTimeSeries, source, fields::Tuple, area::Extent, years)
+# ARCO-ERA5's Zarr dims come back as bare integer NoLookups (no real
+# coordinate values), so coordinates are read directly from the store —
+# see ext/MicroclimateMapperZarrExt.
+function _contiguous_series_coords end
+_contiguous_series_coords(url) = error(
+    "loading a ContiguousTimeSeries source (e.g. ERA5) requires `using ZarrDatasets`",
+)
+
+function _load_contiguous_series(source, fields::Tuple, area::Extent, time_start::DateTime, time_end::DateTime)
     cloud_source = getraster(source)
     full_stack = RasterStack(cloud_source.url; source = Rasters.Zarrsource(), lazy = true)
-    time_start = DateTime(first(years), 1, 1, 0)
-    time_end = DateTime(last(years), 12, 31, 23)
+    coords = _contiguous_series_coords(cloud_source.url)
+
+    hstart = Dates.value(time_start - coords.epoch) ÷ 3_600_000
+    hend = Dates.value(time_end - coords.epoch) ÷ 3_600_000
+    ti = searchsortedfirst(coords.hours, hstart):searchsortedlast(coords.hours, hend)
+
+    # Longitude is stored 0..360; latitude is stored descending 90..-90.
+    lon360(x) = mod(x, 360)
+    xi = findfirst(>=(lon360(area.X[1])), coords.lon):findlast(<=(lon360(area.X[2])), coords.lon)
+    yi = findfirst(<=(area.Y[2]), coords.lat):findlast(>=(area.Y[1]), coords.lat)
+    xs, ys = coords.lon[xi], coords.lat[yi]
+
     layers = map(fields) do name
         @info "  loading $source $name..."
         long_name = layername(source, name)
         raw = getproperty(full_stack, Symbol(long_name))
-        read(view(raw,
-            X(area.X[1] .. area.X[2]),
-            Y(area.Y[1] .. area.Y[2]),
-            Ti(time_start .. time_end),
-        ))
+        data = read(view(raw, X(xi), Y(yi), Ti(ti)))
+        Raster(parent(data), (X(xs), Y(ys), Ti(1:length(ti))); crs = EPSG(4326), name)
     end
     return NamedTuple{fields}(layers)
 end
+
+function _load_layers(::ContiguousTimeSeries, source, fields::Tuple, area::Extent, years)
+    time_start = DateTime(first(years), 1, 1, 0)
+    time_end = DateTime(last(years), 12, 31, 23)
+    _load_contiguous_series(source, fields, area, time_start, time_end)
+end
+
+"""
+    prefetch_weather!(source, points, dates; fields = layers(source), batch = Week(1))
+
+Download and cache `source` weather data for `points`' bounding area and
+`dates`, one `batch`-sized NetCDF file at a time under
+`RasterDataSources.rasterpath(source)/prefetch`. Skips batches already
+cached, so a re-run resumes where it left off.
+"""
+function prefetch_weather!(source::Type, points, dates; fields = layers(source), batch = Week(1))
+    area = Extents.buffer(_points_extent(points), (X = _POINTS_LOAD_BUFFER, Y = _POINTS_LOAD_BUFFER))
+    date_start, date_end = extrema(dates)
+    cache_dir = joinpath(RasterDataSources.rasterpath(source), "prefetch")
+    mkpath(cache_dir)
+
+    for b0 in date_start:batch:date_end
+        b1 = min(b0 + batch - Day(1), date_end)
+        path = _prefetch_path(cache_dir, fields, area, b0, b1)
+        if isfile(path)
+            @info "prefetch: $b0 to $b1 already cached"
+            continue
+        end
+        @info "prefetch: downloading $b0 to $b1..."
+        stack = RasterStack(_load_contiguous_series(source, fields, area,
+            DateTime(b0), DateTime(b1) + Day(1) - Second(1)))
+        write(path, stack)
+    end
+    return cache_dir
+end
+
+_prefetch_path(dir, fields, area, b0, b1) = joinpath(dir,
+    "$(join(fields, '-'))_" *
+    "$(round(area.X[1]; digits = 2))_$(round(area.X[2]; digits = 2))_" *
+    "$(round(area.Y[1]; digits = 2))_$(round(area.Y[2]; digits = 2))_" *
+    "$(Dates.format(b0, "yyyymmdd"))_$(Dates.format(b1, "yyyymmdd")).nc")
 
 function _load_field_at_points(source, name, points_dim; kw...)
     lazy_r = Raster(source, name; lazy = true, kw...)
@@ -483,9 +547,17 @@ _match_fallback_resolution_points(target::Calendar, base::Calendar, ::NamedTuple
 
 # Resample a monthly climatology onto `ref`'s grid, then repeat each of its
 # 12*nyears slices across every real day of that month (leap-aware), reusing
-# `ref`'s own Ti axis. Setup-time only.
+# `ref`'s own Ti axis. Setup-time only. `Rasters.resample` rejects a
+# degenerate 1x1 target grid (e.g. a `PointQuery`-sourced `ref`), so that
+# case selects the nearest source cell directly instead.
 function _monthly_to_daily(layer::AbstractRaster, ref::AbstractRaster, years)
-    resampled = Rasters.resample(layer; to = dims(ref, (X, Y)))
+    x_lk, y_lk = dims(ref, X), dims(ref, Y)
+    resampled = if length(x_lk) == 1 && length(y_lk) == 1
+        cell = layer[X(Near(only(x_lk))), Y(Near(only(y_lk)))]
+        Raster(reshape(parent(cell), 1, 1, length(cell)), (x_lk, y_lk, dims(layer, Ti)); crs = crs(layer))
+    else
+        Rasters.resample(layer; to = (x_lk, y_lk))
+    end
     data = parent(resampled)
     ti = dims(ref, Ti)
     out = similar(data, size(data, 1), size(data, 2), length(ti))
@@ -629,6 +701,9 @@ end
     _load_static(loader(source), source, fields, area)
 
 _load_static(_loader, _source, ::Tuple{}, _area) = NamedTuple()
+# Disambiguates against each loader-specific method's ::Tuple{} match below.
+_load_static(::Loader, _source, ::Tuple{}, _area::Extent) = NamedTuple()
+_load_static(::SingleFileBands, _source, ::Tuple{}, _area::Extent) = NamedTuple()
 function _load_static(::Loader, source, fields::Tuple, area::Extent)
     layers = map(fields) do name
         @info "  loading $source $name (static)..."
@@ -830,7 +905,12 @@ end
     _resample!(out, src, rule, nin, nout)
 @inline _disaggregate!(out, src, rule::Disaggregate, nin, nout, ctx) =
     _resample!(out, src, rule, nin, nout, ctx.scratch.solar.out.global_horizontal)
-@inline _resample_by_rule!(out, src, ::Accumulate, nin, nout, ctx) = nothing
+@inline function _resample_by_rule!(out, src, ::Accumulate, nin, nout, ctx)
+    # Coarsening accumulation (nin != nout) isn't implemented yet -- only the
+    # same-resolution passthrough, which is what SubDaily->SubDaily needs.
+    nin == nout && copyto!(out, src)
+    return nothing
+end
 
 
 @inline function _wind_speed!(out, u, v)
@@ -845,21 +925,28 @@ function _vapour_pressure_from_specific_humidity!(out, q, p)
     return out
 end
 
-function _deep_soil!(out, series, out_per_year)
-    nyears = max(1, length(out) ÷ out_per_year)
-    out_per = length(out) ÷ nyears
-    series_per = length(series) ÷ nyears
-    @inbounds for y in 1:nyears
+# Per-year mean of `series`, broadcast across each year's `out` entries.
+# Year boundaries come from `days_of_year` (wherever it drops instead of
+# increasing), so leap years and monthly-representative-day sequences are
+# both handled correctly -- unlike splitting by a fixed `length ÷ nyears`,
+# which silently drops the remainder whenever years aren't equal length.
+function _deep_soil!(out, series, days_of_year)
+    n = length(out)
+    d = 1
+    @inbounds while d <= n
+        d_end = d
+        while d_end < n && days_of_year[d_end + 1] > days_of_year[d_end]
+            d_end += 1
+        end
         s = zero(eltype(series))
-        sb = (y - 1) * series_per
-        for k in 1:series_per
-            s += series[sb + k]
+        for k in d:d_end
+            s += series[k]
         end
-        m = s / series_per
-        ob = (y - 1) * out_per
-        for d in 1:out_per
-            out[ob + d] = m
+        m = s / (d_end - d + 1)
+        for k in d:d_end
+            out[k] = m
         end
+        d = d_end + 1
     end
     return out
 end
@@ -916,6 +1003,18 @@ end
 @inline _vars_for_step(acc::Tuple, _v, ::EnvSlot, slot::EnvSlot, rest::Tuple) =
     _vars_for(acc, rest, slot)
 
+# All vars except EnvStatic ones (e.g. Elevation), for the MinMax native path.
+@inline non_static_vars(vars::Tuple) = _non_static_vars((), vars)
+@inline _non_static_vars(acc::Tuple, ::Tuple{}) = acc
+@inline function _non_static_vars(acc::Tuple, vars::Tuple)
+    v = first(vars)
+    return _non_static_vars_step(acc, v, env_slot(v), Base.tail(vars))
+end
+@inline _non_static_vars_step(acc::Tuple, _v, ::EnvStatic, rest::Tuple) =
+    _non_static_vars(acc, rest)
+@inline _non_static_vars_step(acc::Tuple, v, ::EnvSlot, rest::Tuple) =
+    _non_static_vars((acc..., v), rest)
+
 # Native quantities only — `EnvDaily` ones live in `buffers.<name>` and
 # come from `_SERIES_DAILY`, so they must not appear in `buffers.native`.
 @inline _native_quantities(source::Type) = _merge_unique(
@@ -942,9 +1041,9 @@ end
 @inline _zero_buffers(quantities::Tuple, n) =
     NamedTuple{map(canonical_name, quantities)}(map(q -> _zeros(working_unit(q), n), quantities))
 
-function _environment_daily(n, rainfall, deep_soil_temperature)
+function _environment_daily(n, rainfall, deep_soil_temperature, shade::Vector{Float64})
     DailyTimeseries(;
-        shade = zeros(Float64, n),
+        shade,
         soil_wetness = zeros(Float64, n),
         surface_emissivity = fill(0.95, n),
         cloud_emissivity = fill(0.95, n),
@@ -981,9 +1080,18 @@ const _ENVELOPE_BUFFERS = (
     Rainfall(), SoilTemperature(Mean()), SoilMoisture(),
 )
 
+const _MINMAX_FORCING_INPUTS = (
+    :reference_temperature_min, :reference_temperature_max,
+    :reference_wind_speed_min, :reference_wind_speed_max,
+    :reference_humidity_min, :reference_humidity_max,
+    :cloud_cover_min, :cloud_cover_max,
+)
+
 function _envelope_forcings(variables::Tuple, b)
     valuesource = name -> getproperty(b, name)
-    standard = Microclimate.bind_forcings(Microclimate.MINMAX_FORCING_MODEL, valuesource)
+    # minmax_forcings derives each _mean from its _min/_max; the field names
+    # it takes match this package's own canonical naming exactly.
+    standard = Microclimate.minmax_forcings(; NamedTuple{_MINMAX_FORCING_INPUTS}(b)...)
     timed = _timed_forcings(variables, valuesource)
     isempty(timed) && return standard
     base = (; standard.reference_temperature, standard.reference_wind_speed, standard.cloud_cover)
@@ -1040,15 +1148,16 @@ const _SERIES_DAILY = (Rainfall(DailyTotal()), SoilTemperature(Mean()), SoilMois
 function _allocate_weather_buffers(calendar::Calendar, ::MinMax, ::Timestep, source::Type,
                                    days_of_year::AbstractVector{Int})
     nsteps = length(days_of_year)
-    vars = variables(source)
+    vars = _full_variables(source)
     b = merge(_zero_buffers(_ENVELOPE_BUFFERS, nsteps), _variable_buffers(vars, nsteps))
 
     forcings = _envelope_forcings(vars, b)
     environment_minmax = _minmax_env_type(calendar)(; forcings)
-    environment_daily = _environment_daily(nsteps, b.rainfall, b.deep_soil_temperature)
+    shade = zeros(Float64, nsteps)
+    environment_daily = _environment_daily(nsteps, b.rainfall, b.deep_soil_temperature, shade)
     environment_hourly = _environment_hourly_stub(nsteps)
 
-    return (; b..., days_of_year,
+    return (; b..., shade, days_of_year,
         environment_minmax, environment_daily, environment_hourly)
 end
 
@@ -1063,10 +1172,11 @@ function _allocate_weather_buffers(::Calendar, native_step::SubDaily, target_ste
     daily  = _zero_buffers(_SERIES_DAILY, ndays)
     native = _zero_buffers(native_names, nnat)
 
-    environment_daily  = _environment_daily(ndays, daily.rainfall_daily, daily.deep_soil_temperature)
+    shade = zeros(Float64, ndays)
+    environment_daily  = _environment_daily(ndays, daily.rainfall_daily, daily.deep_soil_temperature, shade)
     environment_hourly = _environment_hourly(output)
 
-    return (; output..., native, daily..., days_of_year,
+    return (; output..., native, daily..., shade, days_of_year,
         environment_minmax = nothing, environment_daily, environment_hourly)
 end
 
@@ -1083,7 +1193,7 @@ function assemble_weather!(
 )
     buffers = scratch.weather
     atm_pressure = atmospheric_pressure(site.elevation)
-    vars = variables(source)
+    vars = _full_variables(source)
     cal = weather_calendar(source)
     native = native_timestep(source)
 
@@ -1108,7 +1218,7 @@ end
 
 @inline function _assemble!(::MinMax, ::Timestep, buffers, weather, source, ctx,
                             variables, overrides, I)
-    _read_native!(buffers, weather, variables, I)
+    _read_native!(buffers, weather, non_static_vars(variables), I)
     _run_physics!(buffers, ctx, _ENVELOPE_PHYSICS, variables, overrides)
     return nothing
 end
@@ -1219,18 +1329,15 @@ function derive!(r::Reference{<:Temperature}, buffers, ctx)
     _lapse_correct!(buffers[canonical_name(r)], buffers[canonical_name(r.sample)], ctx)
 end
 function derive!(s::Temperature{Maximum}, buffers, ctx)
-    @. buffers[canonical_name(s)] =
-        buffers.mean_temperature + buffers.diurnal_temperature_range / 2
+    buffers[canonical_name(s)] .= buffers.mean_temperature .+ buffers.diurnal_temperature_range ./ 2
     return nothing
 end
 function derive!(s::Temperature{Minimum}, buffers, ctx)
-    @. buffers[canonical_name(s)] =
-        buffers.mean_temperature - buffers.diurnal_temperature_range / 2
+    buffers[canonical_name(s)] .= buffers.mean_temperature .- buffers.diurnal_temperature_range ./ 2
     return nothing
 end
 function derive!(s::Temperature{Mean}, buffers, ctx)
-    @. buffers[canonical_name(s)] =
-        (buffers.reference_temperature_max + buffers.reference_temperature_min) / 2
+    buffers[canonical_name(s)] .= (buffers.reference_temperature_max .+ buffers.reference_temperature_min) ./ 2
     return nothing
 end
 function derive!(s::ActualVapourPressure, buffers, ctx)
@@ -1303,11 +1410,11 @@ function derive!(::Pressure, buffers, ctx)
 end
 function derive!(::Reference{WindSpeed{Maximum}}, buffers, ctx)
     shear = _wind_height_correction(ctx.wind_reference_height)
-    @. buffers.reference_wind_max = buffers.wind_speed * shear
+    @. buffers.reference_wind_speed_max = buffers.wind_speed * shear
     return nothing
 end
 function derive!(::Reference{WindSpeed{Minimum}}, buffers, ctx)
-    @. buffers.reference_wind_min = buffers.reference_wind_max * 0.1
+    @. buffers.reference_wind_speed_min = buffers.reference_wind_speed_max * 0.1
     return nothing
 end
 function derive!(::CloudCover, buffers, ctx)
@@ -1328,15 +1435,15 @@ function derive!(::CloudCover, buffers, ctx)
     return nothing
 end
 function derive!(::CloudCover{Minimum}, buffers, ctx)
-    @. buffers.cloud_min = clamp(buffers.cloud_cover * 0.5, 0.0, 1.0)
+    @. buffers.cloud_cover_min = clamp(buffers.cloud_cover * 0.5, 0.0, 1.0)
     return nothing
 end
 function derive!(::CloudCover{Maximum}, buffers, ctx)
-    @. buffers.cloud_max = clamp(buffers.cloud_cover * 2.0, 0.0, 1.0)
+    @. buffers.cloud_cover_max = clamp(buffers.cloud_cover * 2.0, 0.0, 1.0)
     return nothing
 end
 function derive!(::SoilTemperature{Mean}, buffers, ctx)
-    _deep_soil!(buffers.deep_soil_temperature, _air_temperature(buffers), ctx.steps_per_year)
+    _deep_soil!(buffers.deep_soil_temperature, _air_temperature(buffers), ctx.days_of_year)
     return nothing
 end
 function derive!(::Rainfall{DailyTotal}, buffers, ctx)

@@ -49,6 +49,7 @@ per-run data overrides.
       canonical weather-variable name (e.g. `vapour_pressure_deficit`,
       `mean_temperature`, `cloud_cover`). Each as a `Raster` in canonical
       units; resampled to the run template automatically.
+    * `shade` — fraction (0–1) of shade cast over the site; default 0.
 """
 @kwdef struct MicroRasterProblem{M<:MicroMapModel,A,DT<:Union{Date,AbstractRange{Date}},T,SP<:SoilProfile,IT,D<:NamedTuple,TC<:Timestep}
     model::M
