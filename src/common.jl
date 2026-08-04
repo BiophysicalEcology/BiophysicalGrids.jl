@@ -717,7 +717,7 @@ function _fill_cloud_factors!(factors, weather, cloud_var::Variable, I, nhours_p
     for d in 1:n_weather
         raw   = Float64(cloud_layer[I..., Ti(d)])
         cloud = clamp(cloud_var.transform(raw) * cloud_var.unit, 0.0, 1.0)
-        sf    = sunshine_fraction(Angstrom(), cloud)
+        sf    = Microclimate.sunshine_fraction(Angstrom(), cloud)
         for _ in 1:nhours_per_step
             factors[k] = sf
             k += 1
