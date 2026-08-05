@@ -338,14 +338,14 @@ _resolve_surface_native(
 # Build the per-pixel inputs closure + worker pool
 # ---------------------------------------------------------------------------
 
-# The per-worker lateral-inflow buffer, present on `scratch` only when a routing
-# model is active. `hasproperty` on a NamedTuple folds to a compile-time constant,
-# so this stays type-stable per run (`nothing` ⇒ uncoupled column solve).
+# Per-worker lateral-inflow buffer, on `scratch` only when routing is active.
+# `hasproperty` folds to a compile-time constant, so this stays type-stable
+# (`nothing` ⇒ uncoupled column solve).
 @inline _scratch_lateral(scratch) =
     hasproperty(scratch, :lateral_inflow) ? scratch.lateral_inflow : nothing
 
-# Per-cell max_surface_pool (set by the routed scheduler; large for sink cells).
-# `nothing` when routing is inactive ⇒ the inner solver uses `config.max_surface_pool`.
+# Per-cell max_surface_pool, set by the routed scheduler (large for sink cells).
+# `nothing` when routing is inactive ⇒ inner solver uses `config.max_surface_pool`.
 @inline _scratch_max_pool(scratch) =
     hasproperty(scratch, :max_surface_pool) ? scratch.max_surface_pool[] : nothing
 
@@ -377,9 +377,8 @@ function _build_inputs_and_pool(;
 )
     (; micro_model, lapse_rate_model) = model
     vapour_pressure_method = micro_model.vapour_pressure_equation
-    # Per-worker lateral-inflow buffer (kg/m^2, one entry per output row), reused
-    # across every cell a worker solves. Only allocated when a routing model is
-    # active; `build_inputs` passes it through to `MicroInputs.lateral_inflow`.
+    # Lateral-inflow buffer (kg/m^2, one entry per output row), reused per cell.
+    # Allocated only under routing; `build_inputs` feeds it to `MicroInputs.lateral_inflow`.
     nsteps_out = length(days) * length(micro_model.hours)
 
     calendar = weather_calendar(weather_source)
@@ -472,9 +471,8 @@ function _build_inputs_and_pool(;
         error("All pixels are masked or have missing weather data (ocean?).")
     first_I = DimIndices(terrain.elevation)[ci]
     npixels = length(terrain.elevation)
-    # Each worker gets its own model copy: some sub-models carry mutable
-    # per-solve state (e.g. `DynamicSoilMoisture.soil_wetness`), which would be a
-    # data race if the single shared `micro_model` were reused across threads.
+    # Each worker gets its own model copy: some sub-models carry mutable per-solve
+    # state (e.g. `DynamicSoilMoisture.soil_wetness`) that would race if shared.
     build_cache() = let scratch = allocate_scratch(), worker_model = deepcopy(micro_model)
         (micro = CommonSolve.init(MicroProblem(worker_model, build_inputs(scratch, first_I); days, time_mode)),
          scratch)
@@ -590,9 +588,8 @@ function _solve_proto_pixel!(cache)
 end
 
 function _solve_remaining!(output, solar_output, cache, proto, first_I)
-    # Lateral coupling: solve every active cell in flow-graph dependency order,
-    # routing surface water downslope (routing.jl). Falls through to the
-    # independent per-pixel loop below when no routing model is set.
+    # With routing, solve cells in flow-graph order, routing runoff downslope
+    # (routing.jl); otherwise fall through to the independent per-pixel loop below.
     cache.routing === nothing || return _solve_routed!(output, solar_output, cache, proto, first_I)
 
     cache_pool = cache.cache_pool

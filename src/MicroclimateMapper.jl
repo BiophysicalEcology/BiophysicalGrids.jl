@@ -78,13 +78,9 @@ export
     SOLAR_UVB,
     SOLAR_NIR,
     # Lateral flow routing
-    RoutingModel,
     SurfaceRunoffRouting,
-    SinkHandling,
     TerminalSinks,
     SpillOver,
-    build_flow_graph,
-    FlowGraph,
     # Geocoding utilities
     geocode,
     GeocodeResult,

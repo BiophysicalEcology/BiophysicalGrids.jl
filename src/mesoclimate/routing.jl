@@ -1,59 +1,38 @@
-# routing.jl
-#
-# Lateral surface-water routing along the topographic flow graph (flow_graph.jl).
-#
-# Design: the graph is a D8 drainage forest. Cells are solved in dependency
-# order — every cell after all its upslope contributors — so a cell's lateral
-# inflow is the already-computed `runoff_generated` time series of its upstream
-# cells, fed into the inner solve as a forcing (`MicroInputs.lateral_inflow`).
-# The receiving column's water balance responds (wetter pool/soil), and its own
-# overflow is routed further downslope. Per-cell whole-time-series solves are
-# preserved; there is no global time-stepping.
-#
-# Parallelism comes from the *width* of the dependency DAG, not from independent
-# basins (a single basin still has a wide headwater frontier). An atomic
-# dataflow scheduler processes any cell the moment its last upstream contributor
-# finishes: workers seed from the in-degree-0 sources and walk down flow paths,
-# releasing downstream cells via atomic in-degree counters. Determinism holds
-# regardless of thread count because each cell's inflow is a fixed-order serial
-# sum over its (stored) upstream columns.
+# routing.jl — lateral surface-water routing along the D8 flow graph (flow_graph.jl).
+# Cells solve in dependency order, so a cell's lateral inflow is the already-computed
+# `runoff_generated` series of its upstream cells, fed to the inner solve as a forcing
+# (`MicroInputs.lateral_inflow`); its overflow routes further downslope. An atomic
+# dataflow scheduler exploits the width of the dependency DAG — workers seed from
+# in-degree-0 sources and release downstream cells via atomic in-degree counters.
+# Determinism holds across thread counts: each inflow is a fixed-order serial sum.
 
 abstract type RoutingModel end
 
 """
     SurfaceRunoffRouting(; method = D8(), sinks = TerminalSinks())
 
-Route surface water (`runoff_generated`, the pool overflow above
-`max_surface_pool`) downslope along the DEM flow graph, feeding it into each
-downstream column's water balance as lateral inflow.
+Route surface water (`runoff_generated`, the pool overflow above `max_surface_pool`)
+downslope along the DEM flow graph, feeding it into each downstream column's water
+balance as lateral inflow.
 
-- `method` — flow-direction method. Only `D8()` (single steepest receiver) is
-  supported; its weights are exactly reconstructable, which the exact
-  single-pass routing relies on.
-- `sinks::SinkHandling` — how closed depressions are treated: `TerminalSinks()`
-  (default — endorheic accumulation; carries the sink-cell `pool`) or
-  `SpillOver()` (priority-flood, drains through). See [`SinkHandling`](@ref).
+- `method` — only `D8()` (single steepest receiver) is supported.
+- `sinks` — how closed depressions are treated: `TerminalSinks()` (default,
+  endorheic accumulation) or `SpillOver()` (priority-flood, drains through).
 """
 @kwdef struct SurfaceRunoffRouting{M,SH<:SinkHandling} <: RoutingModel
     method::M = D8()
     sinks::SH = TerminalSinks()
 end
 
-# Per-run routing workspace: the flow graph + the model. The per-cell lateral
-# time-series store is allocated inside the solve (sized from the proto result),
-# so this stays cheap to build at `init` time.
+# Per-run workspace: flow graph + model. The per-cell time-series store is
+# allocated inside the solve, so this is cheap to build at `init`.
 struct RoutingState{FG,M<:RoutingModel}
     graph::FG
     model::M
 end
 
-"""
-    build_routing_state(model::RoutingModel, elevation, mask) -> RoutingState
-
-Build the flow graph for `elevation`/`mask` at `init` time and pair it with the
-routing model. Grid-mode only — points mode has no neighbour topology and must
-reject routing before calling this.
-"""
+# Build the flow graph at `init` time and pair it with the routing model. Grid-mode
+# only — points mode has no neighbour topology and rejects routing before this.
 build_routing_state(model::SurfaceRunoffRouting, elevation, mask) =
     RoutingState(build_flow_graph(elevation, mask; method = model.method, sinks = model.sinks), model)
 
@@ -65,16 +44,13 @@ _sink_pool(::SpillOver, normal) = normal
 # Canonical reporting unit for the routed-runoff output layer.
 canonical_unit(::Val{:runoff_generated}) = u"kg/m^2"
 
-# Gather this cell's lateral inflow (kg/m^2 per output step) into the worker's
-# reusable unitful buffer: the sum over upstream cells' stored outflow columns.
-# No transmission loss is applied here — the water enters this cell's surface pool
-# and the column's own water balance (infiltration + evaporation) removes whatever
-# doesn't run on. Fixed iteration order ⇒ thread-count-independent result.
+# This cell's lateral inflow (kg/m^2 per output step): sum of upstream cells'
+# stored outflow, into the worker's reusable buffer. No transmission loss — the
+# column's own water balance removes what doesn't run on. Fixed order ⇒
+# thread-count-independent.
 @inline function _gather_inflow!(buf, store, g::FlowGraph, id::Int)
-    @inbounds for t in eachindex(buf)
-        buf[t] = 0.0u"kg/m^2"
-    end
-    @inbounds for k in _upstream_range(g, id)
+    fill!(buf, 0.0u"kg/m^2")
+    for k in _upstream_range(g, id)
         up = g.upstream_ids[k]
         for t in axes(store, 1)
             buf[t] += store[t, up] * u"kg/m^2"
@@ -120,7 +96,7 @@ function _solve_routed!(output, solar_output, cache, proto, first_I)
     # Remaining upstream-dependency counters; ready = in-degree-0 sources.
     remaining = [Threads.Atomic{Int}(g.indegree[id]) for id in 1:ncells]
     ready = Channel{Int}(ncells)
-    @inbounds for id in 1:ncells
+    for id in 1:ncells
         g.active[id] && g.indegree[id] == 0 && put!(ready, id)
     end
 
@@ -158,7 +134,7 @@ function _solve_routed!(output, solar_output, cache, proto, first_I)
                         if ok
                             _write_output!(output, c.micro.output, layers, I)
                             _write_slice!(runoff_out, c.micro.output.runoff_generated, I)
-                            @inbounds for t in 1:nsteps
+                            for t in 1:nsteps
                                 store[t, id] = ustrip(u"kg/m^2", c.micro.output.runoff_generated[t])
                             end
                             if has_solar
@@ -167,7 +143,7 @@ function _solve_routed!(output, solar_output, cache, proto, first_I)
                                     solar_pairs, wavelengths, I)
                             end
                         else
-                            @inbounds for t in 1:nsteps
+                            for t in 1:nsteps
                                 store[t, id] = 0.0   # failed solve sheds no water
                             end
                         end
