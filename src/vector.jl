@@ -207,6 +207,10 @@ function CommonSolve.init(problem::MicroVectorProblem)
     (; dem_source, weather_source, landcover_source,
        surface_albedo_source, roughness_height_source, soil_moisture_source) = model
 
+    model.routing_model === nothing || error(
+        "Lateral routing (`routing_model`) requires grid mode (`MicroRasterProblem`); " *
+        "scattered points have no neighbour/flow topology.")
+
     dates_vec = _normalise_dates(dates)
     years = _years_from_dates(dates)
 
@@ -289,6 +293,8 @@ function CommonSolve.init(problem::MicroVectorProblem)
     cloud_constants = _build_cloud_constants()
     solar_pairs = _make_solar_pairs(
         _effective_solar_layers(model), cloud_constants.solar_model.wavelengths)
+    # Every point is active in points mode (no spatial masking).
+    mask = Raster(trues(length(points_dim)), (points_dim,))
     build_inputs, cache_pool = _build_inputs_and_pool(;
         model, weather_source, weather, terrain, mask,
         albedo_grid, roughness_grid, canonical_overrides,
@@ -300,7 +306,7 @@ function CommonSolve.init(problem::MicroVectorProblem)
         problem, weather, terrain, albedo_grid, roughness_grid,
         canonical_overrides, mask, cache_pool,
         (; init_inputs, build_inputs, anchor_dates, solar_pairs),
-        cloud_constants,
+        cloud_constants, nothing,
     )
 end
 

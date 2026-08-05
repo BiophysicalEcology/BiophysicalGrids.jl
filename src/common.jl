@@ -126,8 +126,13 @@ extents and time ranges — pair with a `MicroRasterProblem` (grid) or
   solar radiation rasters are written alongside (or instead of) microclimate
   output. Each layer may request broadband or a waveband integral. Predefined
   constants: `SOLAR_BROADBAND`, `SOLAR_PAR`, `SOLAR_UVB`, `SOLAR_NIR`.
+- `routing_model::RoutingModel` — optional lateral flow model (e.g.
+  `SurfaceRunoffRouting`). When set (grid mode only), surface water is routed
+  downslope along a topographic flow graph and fed into each downstream
+  column's water balance, and a `runoff_generated` layer is added to the
+  output. `nothing` (default) runs every pixel independently as before.
 """
-@kwdef struct MicroMapModel{MM,DS,WS,LCS,SAS,RHS,SMS,OL,LRT,SOL}
+@kwdef struct MicroMapModel{MM,DS,WS,LCS,SAS,RHS,SMS,OL,LRT,SOL,RM}
     micro_model::MM
     dem_source::DS
     weather_source::WS
@@ -141,6 +146,7 @@ extents and time ranges — pair with a `MicroRasterProblem` (grid) or
     solar_only::Bool = false
     cloud_correct_solar::Bool = false
     solar_output_layers::SOL = ()
+    routing_model::RM = nothing
 end
 
 # Per-run workspace built by `init(problem)`. Holds the spatially-extracted
@@ -152,7 +158,7 @@ end
 # the spatial dim differs (`(X, Y)` vs `(Dim{:point},)`); every solve-time
 # code path indexes via `I::Tuple` of dim wrappers from `DimIndices`, so the
 # loop body is mode-agnostic.
-mutable struct MicroMapCache{P,W,T,A,R,CO,M,POOL,SC,CC}
+mutable struct MicroMapCache{P,W,T,A,R,CO,M,POOL,SC,CC,RT}
     problem::P                       # MicroRasterProblem/MicroVectorProblem
     weather::W                       # RasterStack
     terrain::T                       # RasterStack
@@ -163,6 +169,7 @@ mutable struct MicroMapCache{P,W,T,A,R,CO,M,POOL,SC,CC}
     cache_pool::POOL                 # Channel{(; micro::MicroCache, scratch)}
     init_inputs::SC                  # Resolved initial conditions + build_inputs closure
     cloud_constants::CC              # Shared SolarRadiation constants
+    routing::RT                      # nothing, or a RoutingState (grid mode w/ routing_model)
 end
 
 """
@@ -331,6 +338,17 @@ _resolve_surface_native(
 # Build the per-pixel inputs closure + worker pool
 # ---------------------------------------------------------------------------
 
+# The per-worker lateral-inflow buffer, present on `scratch` only when a routing
+# model is active. `hasproperty` on a NamedTuple folds to a compile-time constant,
+# so this stays type-stable per run (`nothing` ⇒ uncoupled column solve).
+@inline _scratch_lateral(scratch) =
+    hasproperty(scratch, :lateral_inflow) ? scratch.lateral_inflow : nothing
+
+# Per-cell max_surface_pool (set by the routed scheduler; large for sink cells).
+# `nothing` when routing is inactive ⇒ the inner solver uses `config.max_surface_pool`.
+@inline _scratch_max_pool(scratch) =
+    hasproperty(scratch, :max_surface_pool) ? scratch.max_surface_pool[] : nothing
+
 # Build the cloud-derivation constants. Immutable, build-once-per-run.
 function _build_cloud_constants()
     return (;
@@ -355,10 +373,14 @@ function _build_inputs_and_pool(;
     model, weather_source, weather, terrain, mask,
     albedo_grid, roughness_grid, canonical_overrides,
     init_inputs, soil_moisture_available, years, days, cloud_constants,
-    soil_profile, target_timestep::Timestep = Hourly(),
+    soil_profile, target_timestep::Timestep = Hourly(), route::Bool = false,
 )
     (; micro_model, lapse_rate_model) = model
     vapour_pressure_method = micro_model.vapour_pressure_equation
+    # Per-worker lateral-inflow buffer (kg/m^2, one entry per output row), reused
+    # across every cell a worker solves. Only allocated when a routing model is
+    # active; `build_inputs` passes it through to `MicroInputs.lateral_inflow`.
+    nsteps_out = length(days) * length(micro_model.hours)
 
     calendar = weather_calendar(weather_source)
     # Must match `days`, not the full `years` span, or sub-yearly runs
@@ -375,6 +397,8 @@ function _build_inputs_and_pool(;
             buffers = allocate_buffers(nmax, cloud_constants.solar_model.diffuse_model),
         ),
         cloud_constants,
+        (route ? (; lateral_inflow = zeros(typeof(0.0u"kg/m^2"), nsteps_out),
+                    max_surface_pool = Base.RefValue(micro_model.config.max_surface_pool)) : (;))...,
     )
 
     npixels = length(terrain.elevation)
@@ -438,6 +462,8 @@ function _build_inputs_and_pool(;
             initial_snow_depth = something(init_inputs.snow_depth, 0.0u"cm"),
             initial_snow_temperature = something(init_inputs.snow_temperature, u"K"(0.0u"°C")),
             initial_snow_density = init_inputs.snow_density,
+            lateral_inflow = _scratch_lateral(scratch),
+            max_surface_pool = _scratch_max_pool(scratch),
         )
     end
 
@@ -446,8 +472,11 @@ function _build_inputs_and_pool(;
         error("All pixels are masked or have missing weather data (ocean?).")
     first_I = DimIndices(terrain.elevation)[ci]
     npixels = length(terrain.elevation)
-    build_cache() = let scratch = allocate_scratch()
-        (micro = CommonSolve.init(MicroProblem(micro_model, build_inputs(scratch, first_I); days, time_mode)),
+    # Each worker gets its own model copy: some sub-models carry mutable
+    # per-solve state (e.g. `DynamicSoilMoisture.soil_wetness`), which would be a
+    # data race if the single shared `micro_model` were reused across threads.
+    build_cache() = let scratch = allocate_scratch(), worker_model = deepcopy(micro_model)
+        (micro = CommonSolve.init(MicroProblem(worker_model, build_inputs(scratch, first_I); days, time_mode)),
          scratch)
     end
 
@@ -561,6 +590,11 @@ function _solve_proto_pixel!(cache)
 end
 
 function _solve_remaining!(output, solar_output, cache, proto, first_I)
+    # Lateral coupling: solve every active cell in flow-graph dependency order,
+    # routing surface water downslope (routing.jl). Falls through to the
+    # independent per-pixel loop below when no routing model is set.
+    cache.routing === nothing || return _solve_routed!(output, solar_output, cache, proto, first_I)
+
     cache_pool = cache.cache_pool
     layers = cache.problem.model.output_layers
     build_inputs = cache.init_inputs.build_inputs

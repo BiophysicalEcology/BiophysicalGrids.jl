@@ -294,6 +294,15 @@ function CommonSolve.init(problem::MicroRasterProblem)
     end
     @info "init: pixels:          $(count(mask)) active / $(length(mask)) total"
 
+    # Topographic flow graph for lateral routing (nothing when no routing_model).
+    routing = if model.routing_model === nothing
+        nothing
+    else
+        model.micro_model.config.soil_moisture_strategy isa Microclimate.PrescribedSoilMoisture &&
+            error("Routing requires DynamicSoilMoisture — PrescribedSoilMoisture cannot infiltrate routed water.")
+        build_routing_state(model.routing_model, terrain.elevation, mask)
+    end
+
     cloud_constants = _build_cloud_constants()
     solar_pairs = _make_solar_pairs(
         _effective_solar_layers(model), cloud_constants.solar_model.wavelengths)
@@ -302,7 +311,7 @@ function CommonSolve.init(problem::MicroRasterProblem)
         model, weather_source, weather, terrain, mask,
         albedo_grid, roughness_grid, canonical_overrides,
         init_inputs, soil_moisture_available, years, days = days_doy, cloud_constants,
-        soil_profile, target_timestep = target,
+        soil_profile, target_timestep = target, route = routing !== nothing,
     )
     @info "init: done"
 
@@ -310,7 +319,7 @@ function CommonSolve.init(problem::MicroRasterProblem)
         problem, weather, terrain, albedo_grid, roughness_grid,
         canonical_overrides, mask, cache_pool,
         (; init_inputs, build_inputs, anchor_dates, solar_pairs),
-        cloud_constants,
+        cloud_constants, routing,
     )
 end
 

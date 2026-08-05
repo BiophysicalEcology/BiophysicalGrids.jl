@@ -77,6 +77,14 @@ export
     SOLAR_PAR,
     SOLAR_UVB,
     SOLAR_NIR,
+    # Lateral flow routing
+    RoutingModel,
+    SurfaceRunoffRouting,
+    SinkHandling,
+    TerminalSinks,
+    SpillOver,
+    build_flow_graph,
+    FlowGraph,
     # Geocoding utilities
     geocode,
     GeocodeResult,
@@ -88,12 +96,14 @@ include("atmosphere/aerosol.jl")
 include("terrain/terrain_utils.jl")
 include("terrain/srtm.jl")
 include("terrain/copernicus_dem.jl")
+include("terrain/flow_graph.jl")
 include("soil/pedotransfer.jl")
 include("soil/soilgrids.jl")
 include("soil/slga.jl")
 include("soil/soil_profile_builder.jl")
 include("mesoclimate/lapse_rate.jl")
 include("mesoclimate/cloud.jl")
+include("mesoclimate/routing.jl")
 include("landcover/landcover.jl")
 include("landcover/earthenv.jl")
 include("landcover/modis.jl")
