@@ -590,7 +590,7 @@ end
 function _solve_remaining!(output, solar_output, cache, proto, first_I)
     # With routing, solve cells in flow-graph order, routing runoff downslope
     # (routing.jl); otherwise fall through to the independent per-pixel loop below.
-    cache.routing === nothing || return _solve_routed!(output, solar_output, cache, proto, first_I)
+    cache.routing === nothing || return _solve_routed!(output, solar_output, cache, proto)
 
     cache_pool = cache.cache_pool
     layers = cache.problem.model.output_layers

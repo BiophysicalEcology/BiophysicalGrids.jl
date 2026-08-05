@@ -63,115 +63,134 @@ end
 # Atomic dataflow scheduler
 # ---------------------------------------------------------------------------
 
-# Routed variant of `_solve_remaining!`. Solves every active cell in dependency
-# order across the worker pool, threading each cell's upstream outflow in as
-# `lateral_inflow` and recording its own `runoff_generated` for downstream cells.
-function _solve_routed!(output, solar_output, cache, proto, first_I)
-    rs = cache.routing
-    g = rs.graph
-    model = cache.problem.model
-    # Endorheic sink cells get an effectively unbounded pool so routed inflow
-    # accumulates (removed only by evaporation/infiltration); all other cells
-    # keep the model's normal max_surface_pool and shed overflow downslope.
-    normal_pool = model.micro_model.config.max_surface_pool
-    sink_pool = _sink_pool(rs.model.sinks, normal_pool)
-    layers = model.output_layers
-    build_inputs = cache.init_inputs.build_inputs
-    has_solar = solar_output !== nothing
-    solar_pairs = cache.init_inputs.solar_pairs
-    wavelengths = has_solar ? cache.cloud_constants.solar_model.wavelengths : nothing
+# Shared state for one routed solve, built once and shared across workers. Config off
+# the hot path is reached through `cache`; `store` is nsteps × ncells outflow, kg/m^2.
+struct RoutedSolve{C,G<:FlowGraph,O,S,R,P,Q}
+    cache::C
+    g::G
+    output::O
+    solar_output::S
+    store::Matrix{Float64}
+    runoff_out::R
+    normal_pool::P
+    sink_pool::Q
+    nsteps::Int
+    n_active::Int
+    remaining::Vector{Threads.Atomic{Int}}
+    ready::Channel{Int}
+    solved::Threads.Atomic{Int}
+    show_progress::Bool
+    t_start::Float64
+    last_report_ms::Threads.Atomic{Int64}
+end
+
+@inline _has_solar(rs::RoutedSolve) = rs.solar_output !== nothing
+
+function _init_routed_solve(output, solar_output, cache, proto)
+    g = cache.routing.graph
+    normal_pool = cache.problem.model.micro_model.config.max_surface_pool
+    sink_pool = _sink_pool(cache.routing.model.sinks, normal_pool)
 
     nsteps = length(proto.micro.output.runoff_generated)
-    put!(cache.cache_pool, proto)          # proto is re-solved as an ordinary cell
-
-    ncells = g.ncells
-    n_active = count(g.active)
-    # Per-cell lateral runoff time series (kg/m^2, stripped), column = one cell.
-    store = zeros(Float64, nsteps, ncells)
-    # Runoff output raster (merged into the returned stack), shaped like a scalar layer.
+    store = zeros(Float64, nsteps, g.ncells)
     ti = dims(first(values(output)), Ti)
     runoff_out = _allocate_layer_array(typeof(1.0u"kg/m^2"),
         (dims(cache.terrain.elevation)..., ti), cache.mask)
 
-    # Remaining upstream-dependency counters; ready = in-degree-0 sources.
-    remaining = [Threads.Atomic{Int}(g.indegree[id]) for id in 1:ncells]
-    ready = Channel{Int}(ncells)
-    for id in 1:ncells
-        g.active[id] && g.indegree[id] == 0 && put!(ready, id)
+    remaining = [Threads.Atomic{Int}(g.indegree[id]) for id in 1:g.ncells]
+    ready = Channel{Int}(g.ncells)
+    for id in 1:g.ncells
+        g.active[id] && g.indegree[id] == 0 && put!(ready, id)   # in-degree-0 sources
     end
 
-    solved = Threads.Atomic{Int}(0)
-    show_progress = n_active > 10
+    n_active = count(g.active)
     t_start = time()
-    last_report_ms = Threads.Atomic{Int64}(round(Int64, (t_start - 10.1) * 1000))
+    return RoutedSolve(cache, g, output, solar_output, store, runoff_out,
+        normal_pool, sink_pool, nsteps, n_active, remaining, ready,
+        Threads.Atomic{Int}(0), n_active > 10, t_start,
+        Threads.Atomic{Int64}(round(Int64, (t_start - 10.1) * 1000)))
+end
 
-    nworkers = cache.cache_pool.sz_max
-    @sync for _ in 1:nworkers
+# Solve every active cell in flow-graph dependency order across the worker pool.
+function _solve_routed!(output, solar_output, cache, proto)
+    put!(cache.cache_pool, proto)          # proto is re-solved as an ordinary cell
+    rs = _init_routed_solve(output, solar_output, cache, proto)
+
+    @sync for _ in 1:cache.cache_pool.sz_max
         Threads.@spawn begin
             c = take!(cache.cache_pool)
-            buf = c.scratch.lateral_inflow          # worker-owned, reused every cell
             try
-                while true
-                    id = try
-                        take!(ready)
-                    catch e
-                        e isa InvalidStateException && break   # queue closed → done
-                        rethrow()
-                    end
-                    # Walk down the flow path: adopt each downstream cell that this
-                    # worker makes ready (cache-friendly; no queue round-trip).
-                    while id != 0
-                        I = g.dimindices[id]
-                        _gather_inflow!(buf, store, g, id)
-                        c.scratch.max_surface_pool[] = g.is_sink[id] ? sink_pool : normal_pool
-                        reinit!(c.micro, build_inputs(c.scratch, I))
-                        ok = true
-                        try
-                            solve!(c.micro)
-                        catch
-                            ok = false
-                        end
-                        if ok
-                            _write_output!(output, c.micro.output, layers, I)
-                            _write_slice!(runoff_out, c.micro.output.runoff_generated, I)
-                            for t in 1:nsteps
-                                store[t, id] = ustrip(u"kg/m^2", c.micro.output.runoff_generated[t])
-                            end
-                            if has_solar
-                                _compute_solar_for_pixel!(c.scratch, cache.terrain, cache.albedo_grid, I)
-                                _write_solar_output!(solar_output, c.scratch.solar.out,
-                                    solar_pairs, wavelengths, I)
-                            end
-                        else
-                            for t in 1:nsteps
-                                store[t, id] = 0.0   # failed solve sheds no water
-                            end
-                        end
-
-                        # Release the single downstream cell; adopt it if we made it ready.
-                        next_id = 0
-                        r = g.receiver[id]
-                        if r != 0 && g.active[r] && Threads.atomic_sub!(remaining[r], 1) == 1
-                            next_id = r
-                        end
-
-                        n = Threads.atomic_add!(solved, 1) + 1
-                        n == n_active && close(ready)
-                        if show_progress
-                            _maybe_report_routing(n, n_active, t_start, last_report_ms)
-                        end
-                        id = next_id
-                    end
-                end
+                _run_worker!(rs, c)
             finally
                 put!(cache.cache_pool, c)
             end
         end
     end
 
-    base = merge(NamedTuple(output), (; runoff_generated = runoff_out))
-    has_solar && (base = merge(base, NamedTuple(solar_output)))
+    base = merge(NamedTuple(rs.output), (; runoff_generated = rs.runoff_out))
+    _has_solar(rs) && (base = merge(base, NamedTuple(rs.solar_output)))
     return RasterStack(base)
+end
+
+# Take ready cells from the queue (until it closes); walk each flow path downstream,
+# adopting the next cell we make ready rather than round-tripping the queue.
+function _run_worker!(rs::RoutedSolve, c)
+    buf = c.scratch.lateral_inflow          # worker-owned, reused every cell
+    for id in rs.ready
+        while id != 0
+            _solve_cell!(rs, c, buf, id)
+            next_id = _release_downstream!(rs, id)
+            _mark_solved!(rs)
+            id = next_id
+        end
+    end
+    return nothing
+end
+
+function _solve_cell!(rs::RoutedSolve, c, buf, id::Int)
+    g = rs.g
+    I = g.dimindices[id]
+    _gather_inflow!(buf, rs.store, g, id)
+    c.scratch.max_surface_pool[] = g.is_sink[id] ? rs.sink_pool : rs.normal_pool
+    reinit!(c.micro, rs.cache.init_inputs.build_inputs(c.scratch, I))
+    ok = true
+    try
+        solve!(c.micro)             # one failed cell must not abort the run
+    catch
+        ok = false
+    end
+    if ok
+        out = c.micro.output
+        _write_output!(rs.output, out, rs.cache.problem.model.output_layers, I)
+        _write_slice!(rs.runoff_out, out.runoff_generated, I)
+        rs.store[:, id] .= ustrip.(u"kg/m^2", out.runoff_generated)
+        _write_solar!(rs, c, I)
+    else
+        rs.store[:, id] .= 0.0      # failed solve sheds no water
+    end
+    return nothing
+end
+
+function _write_solar!(rs::RoutedSolve, c, I)
+    _has_solar(rs) || return nothing
+    _compute_solar_for_pixel!(c.scratch, rs.cache.terrain, rs.cache.albedo_grid, I)
+    _write_solar_output!(rs.solar_output, c.scratch.solar.out,
+        rs.cache.init_inputs.solar_pairs,
+        rs.cache.cloud_constants.solar_model.wavelengths, I)
+    return nothing
+end
+
+# Release the downstream cell; return it if that made it ready (in-degree 0), else 0.
+@inline function _release_downstream!(rs::RoutedSolve, id::Int)
+    r = rs.g.receiver[id]
+    (r != 0 && rs.g.active[r] && Threads.atomic_sub!(rs.remaining[r], 1) == 1) ? r : 0
+end
+
+@inline function _mark_solved!(rs::RoutedSolve)
+    n = Threads.atomic_add!(rs.solved, 1) + 1
+    n == rs.n_active && close(rs.ready)
+    rs.show_progress && _maybe_report_routing(n, rs.n_active, rs.t_start, rs.last_report_ms)
+    return nothing
 end
 
 # Throttled (10 s) progress line, matching the independent loop's cadence.
