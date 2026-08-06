@@ -311,7 +311,7 @@ function CommonSolve.init(problem::MicroRasterProblem)
         model, weather_source, weather, terrain, mask,
         albedo_grid, roughness_grid, canonical_overrides,
         init_inputs, soil_moisture_available, years, days = days_doy, cloud_constants,
-        soil_profile, target_timestep = target, route = routing !== nothing,
+        soil_profile, target_timestep = target,
     )
     @info "init: done"
 

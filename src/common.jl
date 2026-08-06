@@ -338,17 +338,6 @@ _resolve_surface_native(
 # Build the per-pixel inputs closure + worker pool
 # ---------------------------------------------------------------------------
 
-# Per-worker lateral-inflow buffer, on `scratch` only when routing is active.
-# `hasproperty` folds to a compile-time constant, so this stays type-stable
-# (`nothing` ⇒ uncoupled column solve).
-@inline _scratch_lateral(scratch) =
-    hasproperty(scratch, :lateral_inflow) ? scratch.lateral_inflow : nothing
-
-# Per-cell max_surface_pool, set by the routed scheduler (large for sink cells).
-# `nothing` when routing is inactive ⇒ inner solver uses `config.max_surface_pool`.
-@inline _scratch_max_pool(scratch) =
-    hasproperty(scratch, :max_surface_pool) ? scratch.max_surface_pool[] : nothing
-
 # Build the cloud-derivation constants. Immutable, build-once-per-run.
 function _build_cloud_constants()
     return (;
@@ -373,13 +362,10 @@ function _build_inputs_and_pool(;
     model, weather_source, weather, terrain, mask,
     albedo_grid, roughness_grid, canonical_overrides,
     init_inputs, soil_moisture_available, years, days, cloud_constants,
-    soil_profile, target_timestep::Timestep = Hourly(), route::Bool = false,
+    soil_profile, target_timestep::Timestep = Hourly(),
 )
     (; micro_model, lapse_rate_model) = model
     vapour_pressure_method = micro_model.vapour_pressure_equation
-    # Lateral-inflow buffer (kg/m^2, one entry per output row), reused per cell.
-    # Allocated only under routing; `build_inputs` feeds it to `MicroInputs.lateral_inflow`.
-    nsteps_out = length(days) * length(micro_model.hours)
 
     calendar = weather_calendar(weather_source)
     # Must match `days`, not the full `years` span, or sub-yearly runs
@@ -396,8 +382,6 @@ function _build_inputs_and_pool(;
             buffers = allocate_buffers(nmax, cloud_constants.solar_model.diffuse_model),
         ),
         cloud_constants,
-        (route ? (; lateral_inflow = zeros(typeof(0.0u"kg/m^2"), nsteps_out),
-                    max_surface_pool = Base.RefValue(micro_model.config.max_surface_pool)) : (;))...,
     )
 
     npixels = length(terrain.elevation)
@@ -425,7 +409,9 @@ function _build_inputs_and_pool(;
     @info "model: wind:            reference height $(wind_tgt) m, power law-corrected from 10 m (source)"
     @info "model: threads:         $(Threads.nthreads())"
 
-    function build_inputs(scratch, I::Tuple)
+    # Routing state (`lateral_inflow`, `max_surface_pool`) is passed in by the routed
+    # scheduler per cell; both default to `nothing` (uncoupled column solve).
+    function build_inputs(scratch, I::Tuple; lateral_inflow = nothing, max_surface_pool = nothing)
         horizon_angles = terrain.horizon_angles[I...]
         site = Site(;
             elevation = terrain.elevation[I...],
@@ -461,8 +447,8 @@ function _build_inputs_and_pool(;
             initial_snow_depth = something(init_inputs.snow_depth, 0.0u"cm"),
             initial_snow_temperature = something(init_inputs.snow_temperature, u"K"(0.0u"°C")),
             initial_snow_density = init_inputs.snow_density,
-            lateral_inflow = _scratch_lateral(scratch),
-            max_surface_pool = _scratch_max_pool(scratch),
+            lateral_inflow,
+            max_surface_pool,
         )
     end
 

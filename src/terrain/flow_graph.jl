@@ -4,9 +4,9 @@
 # (a forcing, no global time-stepping). Stored as flat arrays for the routing.jl
 # scheduler: `receiver` (forward edge) + a CSR pair `upstream_ids`/`offsets`.
 
-# Directed D8 drainage forest over the run grid. Ids are linear indices into the
-# ascending (X→, Y→) canonical matrix from `elevation`; `dimindices` maps each id
-# back to the `(X(i), Y(j))` selector for `terrain`/`output`/`build_inputs`.
+# Directed D8 drainage forest over the run grid. Ids are linear indices over the
+# `elevation` grid; `dimindices` maps each id back to its raster selector for
+# `terrain`/`output`/`build_inputs`.
 # Fields: `receiver` downstream id per cell (0 = outlet/inactive); `upstream_ids`
 # + `offsets` a CSR store of contributors (cell `id`'s are
 # `upstream_ids[offsets[id]:offsets[id+1]-1]`); `indegree` contributor count;
@@ -34,10 +34,6 @@ const _NB8_DIST = (1.0, 1.0, 1.0, 1.0, sqrt(2.0), sqrt(2.0), sqrt(2.0), sqrt(2.0
 
 # Index range of cell `id`'s upstream contributors in the CSR `upstream_ids` store.
 @inline _upstream_range(g::FlowGraph, id::Int) = g.offsets[id]:(g.offsets[id+1] - 1)
-
-# Map from ascending-matrix position along one axis back to the raster's own
-# index along that axis. Ascending axes map identically; descending axes flip.
-@inline _asc_map(ascending::Bool, n::Int) = ascending ? (a -> a) : (a -> n - a + 1)
 
 # How closed topographic depressions are treated when the graph is built —
 # whether water at a local minimum retains (`TerminalSinks`) or spills (`SpillOver`).
@@ -76,24 +72,16 @@ function build_flow_graph(elevation::Raster, mask; method = D8(), sinks::SinkHan
         "build_flow_graph: only D8() routing is supported (single-receiver flow " *
         "with reconstructable weights); got $(method).")
 
-    xlk = lookup(elevation, X)
-    ylk = lookup(elevation, Y)
-    nx = length(xlk)
-    ny = length(ylk)
-    xasc = nx < 2 || first(xlk) <= last(xlk)
-    yasc = ny < 2 || first(ylk) <= last(ylk)
-    ax = _asc_map(xasc, nx)
-    ay = _asc_map(yasc, ny)
-
-    # Ascending (X→, Y→) matrices: elevation (Float64, stripped) + active mask.
-    dem = Matrix{Float64}(undef, nx, ny)
-    active2d = falses(nx, ny)
-    for b in 1:ny, a in 1:nx
-        e = elevation[X(ax(a)), Y(ay(b))]
-        v = ustrip(u"m", e)
-        on = isfinite(v) && Bool(mask[X(ax(a)), Y(ay(b))])
-        active2d[a, b] = on
-        dem[a, b] = on ? v : 0.0   # value under masked cells is never read by the flood
+    # elevation (Float64, stripped) + active mask, addressed by `DimIndices` so raster
+    # storage orientation is irrelevant — D8 drainage is orientation-invariant.
+    dimidx = DimIndices(elevation)
+    dem = zeros(dims(dimidx))
+    active2d = falses(dims(dimidx))
+    for D in dimidx
+        v = ustrip(u"m", elevation[D])
+        on = isfinite(v) && Bool(mask[D])
+        active2d[D] = on
+        dem[D] = on ? v : 0.0   # value under masked cells is never read by the flood
     end
 
     R = CartesianIndices(dem)
@@ -143,8 +131,7 @@ function build_flow_graph(elevation::Raster, mask; method = D8(), sinks::SinkHan
     end
 
     order = _topological_order(receiver, indegree, active, ncells)
-    # Flat Vector indexed by linear cell id (column-major, matching `L`).
-    dimindices = [(X(ax(c[1])), Y(ay(c[2]))) for c in vec(R)]
+    dimindices = collect(vec(dimidx))   # linear cell id → raster dim-index
 
     return FlowGraph(receiver, upstream_ids, offsets, indegree, order,
                      dimindices, active, is_sink, ncells)
