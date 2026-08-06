@@ -573,11 +573,13 @@ function _solve_proto_pixel!(cache)
     error("No pixel solved successfully — all pixels are masked, ocean, or have invalid weather data.")
 end
 
-function _solve_remaining!(output, solar_output, cache, proto, first_I)
-    # With routing, solve cells in flow-graph order, routing runoff downslope
-    # (routing.jl); otherwise fall through to the independent per-pixel loop below.
-    cache.routing === nothing || return _solve_routed!(output, solar_output, cache, proto)
+# Solve every pixel after the proto, dispatching on whether lateral routing is active
+# (`::RoutingState` method lives in routing.jl).
+_solve_remaining!(output, solar_output, cache, proto, first_I) =
+    _solve_remaining!(cache.routing, output, solar_output, cache, proto, first_I)
 
+# No routing: independent per-pixel loop.
+function _solve_remaining!(::Nothing, output, solar_output, cache, proto, first_I)
     cache_pool = cache.cache_pool
     layers = cache.problem.model.output_layers
     build_inputs = cache.init_inputs.build_inputs

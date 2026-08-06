@@ -63,19 +63,15 @@ canonical_unit(::Val{:runoff_generated}) = u"kg/m^2"
 end
 
 # Shared state for one routed solve; `store` is nsteps × ncells outflow (kg/m^2).
-struct RoutedSolve{C,G<:FlowGraph,O,S,R,P,SK<:SinkHandling,B}
+# One routed solve: the init-allocated `state` (graph + reusable workspace) plus the
+# fields specific to this call — the output rasters, the ready queue, and progress.
+struct RoutedSolve{C,S<:RoutingState,O,SO,RO,P}
     cache::C
-    g::G
+    state::S
     output::O
-    solar_output::S
-    store::Matrix{Float64}
-    runoff_out::R
+    solar_output::SO
+    runoff_out::RO
     normal_pool::P
-    sinks::SK
-    buffers::B                       # one reusable inflow buffer per worker
-    nsteps::Int
-    n_active::Int
-    remaining::Vector{Threads.Atomic{Int}}
     ready::Channel{Int}
     solved::Threads.Atomic{Int}
     show_progress::Bool
@@ -86,21 +82,21 @@ end
 @inline _has_solar(rs::RoutedSolve) = rs.solar_output !== nothing
 
 # Clear the reused workspace so a fresh solve isn't contaminated by the previous one.
-function _reset_workspace!(rs::RoutingState)
-    fill!(rs.store, 0.0)
-    for id in eachindex(rs.remaining)
-        rs.remaining[id][] = rs.graph.indegree[id]
+function _reset_workspace!(state::RoutingState)
+    fill!(state.store, 0.0)
+    for id in eachindex(state.remaining)
+        state.remaining[id][] = state.graph.indegree[id]
     end
-    return rs
+    return state
 end
 
 # Reset the init-allocated workspace for one solve and bind it to this call's outputs.
 function _init_routed_solve(output, solar_output, cache, proto)
-    rs = cache.routing
-    g = rs.graph
+    state = cache.routing
+    g = state.graph
     normal_pool = cache.problem.model.micro_model.config.max_surface_pool
 
-    _reset_workspace!(rs)
+    _reset_workspace!(state)
     ready = Channel{Int}(g.ncells)
     for id in 1:g.ncells
         g.active[id] && g.indegree[id] == 0 && put!(ready, id)   # in-degree-0 sources
@@ -110,21 +106,21 @@ function _init_routed_solve(output, solar_output, cache, proto)
         (dims(cache.terrain.elevation)..., ti), cache.mask)
 
     t_start = time()
-    return RoutedSolve(cache, g, output, solar_output, rs.store, runoff_out,
-        normal_pool, rs.model.sinks, rs.buffers, rs.nsteps, rs.n_active,
-        rs.remaining, ready, Threads.Atomic{Int}(0), rs.n_active > 10, t_start,
+    return RoutedSolve(cache, state, output, solar_output, runoff_out, normal_pool,
+        ready, Threads.Atomic{Int}(0), state.n_active > 10, t_start,
         Threads.Atomic{Int64}(round(Int64, (t_start - 10.1) * 1000)))
 end
 
-function _solve_routed!(output, solar_output, cache, proto)
+# Routing active: solve cells in flow-graph dependency order, routing runoff downslope.
+function _solve_remaining!(::RoutingState, output, solar_output, cache, proto, _first_I)
     put!(cache.cache_pool, proto)          # proto is re-solved as an ordinary cell
     rs = _init_routed_solve(output, solar_output, cache, proto)
 
-    @sync for w in 1:length(rs.buffers)
+    @sync for w in 1:length(rs.state.buffers)
         Threads.@spawn begin
             c = take!(cache.cache_pool)
             try
-                _run_worker!(rs, c, rs.buffers[w])
+                _run_worker!(rs, c, rs.state.buffers[w])
             finally
                 put!(cache.cache_pool, c)
             end
@@ -150,10 +146,10 @@ function _run_worker!(rs::RoutedSolve, c, buf)
 end
 
 function _solve_cell!(rs::RoutedSolve, c, buf, id::Int)
-    g = rs.g
+    g = rs.state.graph
     I = g.dimindices[id]
-    _gather_inflow!(buf, rs.store, g, id)
-    pool = _cell_pool(rs.sinks, g, id, rs.normal_pool)
+    _gather_inflow!(buf, rs.state.store, g, id)
+    pool = _cell_pool(rs.state.model.sinks, g, id, rs.normal_pool)
     reinit!(c.micro, rs.cache.init_inputs.build_inputs(c.scratch, I;
         lateral_inflow = buf, max_surface_pool = pool))
     ok = true
@@ -166,10 +162,10 @@ function _solve_cell!(rs::RoutedSolve, c, buf, id::Int)
         out = c.micro.output
         _write_output!(rs.output, out, rs.cache.problem.model.output_layers, I)
         _write_slice!(rs.runoff_out, out.runoff_generated, I)
-        rs.store[:, id] .= ustrip.(u"kg/m^2", out.runoff_generated)
+        rs.state.store[:, id] .= ustrip.(u"kg/m^2", out.runoff_generated)
         _write_solar!(rs, c, I)
     else
-        rs.store[:, id] .= 0.0      # failed solve sheds no water
+        rs.state.store[:, id] .= 0.0      # failed solve sheds no water
     end
     return nothing
 end
@@ -184,14 +180,15 @@ function _write_solar!(rs::RoutedSolve, c, I)
 end
 
 @inline function _release_downstream!(rs::RoutedSolve, id::Int)
-    r = rs.g.receiver[id]
-    (r != 0 && rs.g.active[r] && Threads.atomic_sub!(rs.remaining[r], 1) == 1) ? r : 0
+    g = rs.state.graph
+    r = g.receiver[id]
+    (r != 0 && g.active[r] && Threads.atomic_sub!(rs.state.remaining[r], 1) == 1) ? r : 0
 end
 
 @inline function _mark_solved!(rs::RoutedSolve)
     n = Threads.atomic_add!(rs.solved, 1) + 1
-    n == rs.n_active && close(rs.ready)
-    rs.show_progress && _maybe_report_routing(n, rs.n_active, rs.t_start, rs.last_report_ms)
+    n == rs.state.n_active && close(rs.ready)
+    rs.show_progress && _maybe_report_routing(n, rs.state.n_active, rs.t_start, rs.last_report_ms)
     return nothing
 end
 
