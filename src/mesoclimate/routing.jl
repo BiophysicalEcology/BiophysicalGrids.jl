@@ -21,14 +21,27 @@ balance as lateral inflow.
     sinks::SH = TerminalSinks()
 end
 
-struct RoutingState{FG,M<:RoutingModel}
+# Built once at `init` (grid mode only): the flow graph plus the reusable per-solve
+# workspace — `store` (nsteps × ncells outflow, kg/m^2 stripped), one inflow `buffer`
+# per worker, and the per-cell `remaining` upstream counters. `solve!` resets these
+# rather than reallocating.
+struct RoutingState{FG,M<:RoutingModel,ST,BUF}
     graph::FG
     model::M
+    store::ST
+    buffers::BUF
+    remaining::Vector{Threads.Atomic{Int}}
+    nsteps::Int
+    n_active::Int
 end
 
-# Grid-mode only; points mode has no neighbour topology and rejects routing before this.
-build_routing_state(model::SurfaceRunoffRouting, elevation, mask) =
-    RoutingState(build_flow_graph(elevation, mask; method = model.method, sinks = model.sinks), model)
+function build_routing_state(model::SurfaceRunoffRouting, elevation, mask, nsteps, nworkers)
+    graph = build_flow_graph(elevation, mask; method = model.method, sinks = model.sinks)
+    store = zeros(Float64, nsteps, graph.ncells)
+    buffers = [zeros(typeof(0.0u"kg/m^2"), nsteps) for _ in 1:nworkers]
+    remaining = [Threads.Atomic{Int}(0) for _ in 1:graph.ncells]
+    return RoutingState(graph, model, store, buffers, remaining, nsteps, count(graph.active))
+end
 
 # Per-cell `max_surface_pool` by sink model; TerminalSinks gives sink cells its large
 # pool so inflow accumulates there. New SinkHandling types add a method, not a branch.
@@ -72,28 +85,34 @@ end
 
 @inline _has_solar(rs::RoutedSolve) = rs.solar_output !== nothing
 
+# Clear the reused workspace so a fresh solve isn't contaminated by the previous one.
+function _reset_workspace!(rs::RoutingState)
+    fill!(rs.store, 0.0)
+    for id in eachindex(rs.remaining)
+        rs.remaining[id][] = rs.graph.indegree[id]
+    end
+    return rs
+end
+
+# Reset the init-allocated workspace for one solve and bind it to this call's outputs.
 function _init_routed_solve(output, solar_output, cache, proto)
-    g = cache.routing.graph
+    rs = cache.routing
+    g = rs.graph
     normal_pool = cache.problem.model.micro_model.config.max_surface_pool
 
-    nsteps = length(proto.micro.output.runoff_generated)
-    store = zeros(Float64, nsteps, g.ncells)
-    ti = dims(first(values(output)), Ti)
-    runoff_out = _allocate_layer_array(typeof(1.0u"kg/m^2"),
-        (dims(cache.terrain.elevation)..., ti), cache.mask)
-    buffers = [zeros(typeof(0.0u"kg/m^2"), nsteps) for _ in 1:cache.cache_pool.sz_max]
-
-    remaining = [Threads.Atomic{Int}(g.indegree[id]) for id in 1:g.ncells]
+    _reset_workspace!(rs)
     ready = Channel{Int}(g.ncells)
     for id in 1:g.ncells
         g.active[id] && g.indegree[id] == 0 && put!(ready, id)   # in-degree-0 sources
     end
+    ti = dims(first(values(output)), Ti)
+    runoff_out = _allocate_layer_array(typeof(1.0u"kg/m^2"),
+        (dims(cache.terrain.elevation)..., ti), cache.mask)
 
-    n_active = count(g.active)
     t_start = time()
-    return RoutedSolve(cache, g, output, solar_output, store, runoff_out,
-        normal_pool, cache.routing.model.sinks, buffers, nsteps, n_active,
-        remaining, ready, Threads.Atomic{Int}(0), n_active > 10, t_start,
+    return RoutedSolve(cache, g, output, solar_output, rs.store, runoff_out,
+        normal_pool, rs.model.sinks, rs.buffers, rs.nsteps, rs.n_active,
+        rs.remaining, ready, Threads.Atomic{Int}(0), rs.n_active > 10, t_start,
         Threads.Atomic{Int64}(round(Int64, (t_start - 10.1) * 1000)))
 end
 

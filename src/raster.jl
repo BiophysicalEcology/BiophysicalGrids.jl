@@ -300,7 +300,9 @@ function CommonSolve.init(problem::MicroRasterProblem)
     else
         model.micro_model.config.soil_moisture_strategy isa Microclimate.PrescribedSoilMoisture &&
             error("Routing requires DynamicSoilMoisture — PrescribedSoilMoisture cannot infiltrate routed water.")
-        build_routing_state(model.routing_model, terrain.elevation, mask)
+        nsteps = length(days_doy) * length(model.micro_model.hours)
+        nworkers = min(Threads.nthreads(), length(terrain.elevation))
+        build_routing_state(model.routing_model, terrain.elevation, mask, nsteps, nworkers)
     end
 
     cloud_constants = _build_cloud_constants()
