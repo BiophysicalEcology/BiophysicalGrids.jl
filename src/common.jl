@@ -268,6 +268,8 @@ _resolve_weather(data::NamedTuple, source, area, years) =
 # `start_date`, for whichever of the two `init_source` actually declares.
 _load_init_soil(::Nothing, _area, _start_date) =
     (; soil_temperature = nothing, soil_moisture = nothing)
+_load_init_soil(::Nothing, ::Extent, ::Date) =
+    (; soil_temperature = nothing, soil_moisture = nothing)
 function _load_init_soil(init_source, area::Extent, start_date::Date)
     vars = init_variables(init_source)
     soil_temperature = _maybe_variable(vars, :deep_soil_temperature) === nothing ? nothing :
