@@ -70,7 +70,7 @@ end
 @inline _canonical_name(q::Sample, ::Nothing) = physical_quantity(q)
 @inline _canonical_name(q::Sample, ::Maximum) = Symbol(physical_quantity(q), :_max)
 @inline _canonical_name(q::Sample, ::Minimum) = Symbol(physical_quantity(q), :_min)
-@inline _canonical_name(q::Sample, ::Mean) = Symbol(:mean_, physical_quantity(q))
+@inline _canonical_name(q::Sample, ::Mean) = Symbol(physical_quantity(q), :_mean)
 @inline _canonical_name(q::Sample, ::DiurnalRange) = Symbol(:diurnal_, physical_quantity(q), :_range)
 @inline _canonical_name(q::Sample, ::DailyTotal) = Symbol(physical_quantity(q), :_daily)
 @inline _canonical_name(q::Sample, t::TimeOfDay) =
@@ -629,6 +629,10 @@ end
     _load_static(loader(source), source, fields, area)
 
 _load_static(_loader, _source, ::Tuple{}, _area) = NamedTuple()
+# Resolve the ambiguity for empty `static_vars` (e.g. TerraClimate, only Ti-varying
+# vars), where both `(::Any, ::Tuple{})` and `(::Loader, ::Tuple)` would match.
+_load_static(::Loader, _source, ::Tuple{}, _area::Extent) = NamedTuple()
+_load_static(::SingleFileBands, _source, ::Tuple{}, _area::Extent) = NamedTuple()
 function _load_static(::Loader, source, fields::Tuple, area::Extent)
     layers = map(fields) do name
         @info "  loading $source $name (static)..."
@@ -682,7 +686,7 @@ end
 # const _ENVELOPE_PHYSICS = (
 #     Val(:reference_temperature_max),
 #     Val(:reference_temperature_min),
-#     Val(:mean_temperature),
+#     Val(:temperature_mean),
 #     Val(:wind_speed),
 #     Val(:actual_vapour_pressure),
 #     Val(:vapour_pressure_deficit),
@@ -707,11 +711,14 @@ const _ENVELOPE_PHYSICS = (
     VapourPressureDeficit(),
     Reference(RelativeHumidity(Maximum())),
     Reference(RelativeHumidity(Minimum())),
+    Reference(RelativeHumidity(Mean())),
     Reference(WindSpeed(Maximum())),
     Reference(WindSpeed(Minimum())),
+    Reference(WindSpeed(Mean())),
     CloudCover(),
     CloudCover(Minimum()),
     CloudCover(Maximum()),
+    CloudCover(Mean()),
     SoilTemperature(Mean()),
 )
 
@@ -972,12 +979,12 @@ const _ENVELOPE_BUFFERS = (
     Temperature(Maximum()), Temperature(Minimum()), Temperature(Mean()),
     Reference(Temperature(Minimum())), Reference(Temperature(Maximum())),
     WindSpeed(), EastwardWindSpeed(), NorthwardWindSpeed(),
-    Reference(WindSpeed(Minimum())), Reference(WindSpeed(Maximum())),
+    Reference(WindSpeed(Minimum())), Reference(WindSpeed(Maximum())), Reference(WindSpeed(Mean())),
     VapourPressureDeficit(),
     ActualVapourPressure(),
     SpecificHumidity(), Pressure(),
-    Reference(RelativeHumidity(Minimum())), Reference(RelativeHumidity(Maximum())),
-    GlobalRadiation(), CloudCover(), CloudCover(Minimum()), CloudCover(Maximum()),
+    Reference(RelativeHumidity(Minimum())), Reference(RelativeHumidity(Maximum())), Reference(RelativeHumidity(Mean())),
+    GlobalRadiation(), CloudCover(), CloudCover(Minimum()), CloudCover(Maximum()), CloudCover(Mean()),
     Rainfall(), SoilTemperature(Mean()), SoilMoisture(),
 )
 
@@ -1219,18 +1226,15 @@ function derive!(r::Reference{<:Temperature}, buffers, ctx)
     _lapse_correct!(buffers[canonical_name(r)], buffers[canonical_name(r.sample)], ctx)
 end
 function derive!(s::Temperature{Maximum}, buffers, ctx)
-    @. buffers[canonical_name(s)] =
-        buffers.mean_temperature + buffers.diurnal_temperature_range / 2
+    buffers[canonical_name(s)] .= buffers.temperature_mean .+ buffers.diurnal_temperature_range ./ 2
     return nothing
 end
 function derive!(s::Temperature{Minimum}, buffers, ctx)
-    @. buffers[canonical_name(s)] =
-        buffers.mean_temperature - buffers.diurnal_temperature_range / 2
+    buffers[canonical_name(s)] .= buffers.temperature_mean .- buffers.diurnal_temperature_range ./ 2
     return nothing
 end
 function derive!(s::Temperature{Mean}, buffers, ctx)
-    @. buffers[canonical_name(s)] =
-        (buffers.reference_temperature_max + buffers.reference_temperature_min) / 2
+    buffers[canonical_name(s)] .= (buffers.reference_temperature_max .+ buffers.reference_temperature_min) ./ 2
     return nothing
 end
 function derive!(s::ActualVapourPressure, buffers, ctx)
@@ -1242,7 +1246,7 @@ function derive!(s::ActualVapourPressure, buffers, ctx)
         end
     elseif hasproperty(buffers, :humidity)
         @inbounds for k in eachindex(avp)
-            avp[k] = buffers.humidity[k] * vapour_pressure(method, buffers.mean_temperature[k])
+            avp[k] = buffers.humidity[k] * vapour_pressure(method, buffers.temperature_mean[k])
         end
     elseif hasproperty(buffers, :reference_humidity)
         # Sub-daily-native sources (e.g. BARRA): hourly RH paired with that hour's reference_temperature.
@@ -1258,21 +1262,25 @@ end
 function derive!(::VapourPressureDeficit, buffers, ctx)
     method = ctx.vapour_pressure_method
     @inbounds for k in eachindex(buffers.vapour_pressure_deficit)
-        saturation = vapour_pressure(method, buffers.mean_temperature[k])
+        saturation = vapour_pressure(method, buffers.temperature_mean[k])
         buffers.vapour_pressure_deficit[k] = saturation - buffers.actual_vapour_pressure[k]
     end
     return nothing
 end
 function derive!(::Reference{RelativeHumidity{Maximum}}, buffers, ctx)
     _relative_humidity_from_vpd!(buffers.reference_humidity_max,
-        buffers.vapour_pressure_deficit, buffers.mean_temperature,
+        buffers.vapour_pressure_deficit, buffers.temperature_mean,
         buffers.reference_temperature_min, ctx.vapour_pressure_method)
     return nothing
 end
 function derive!(::Reference{RelativeHumidity{Minimum}}, buffers, ctx)
     _relative_humidity_from_vpd!(buffers.reference_humidity_min,
-        buffers.vapour_pressure_deficit, buffers.mean_temperature,
+        buffers.vapour_pressure_deficit, buffers.temperature_mean,
         buffers.reference_temperature_max, ctx.vapour_pressure_method)
+    return nothing
+end
+function derive!(::Reference{RelativeHumidity{Mean}}, buffers, ctx)
+    buffers.reference_humidity_mean .= (buffers.reference_humidity_min .+ buffers.reference_humidity_max) ./ 2
     return nothing
 end
 function derive!(::WindSpeed, buffers, ctx)
@@ -1303,11 +1311,15 @@ function derive!(::Pressure, buffers, ctx)
 end
 function derive!(::Reference{WindSpeed{Maximum}}, buffers, ctx)
     shear = _wind_height_correction(ctx.wind_reference_height)
-    @. buffers.reference_wind_max = buffers.wind_speed * shear
+    buffers.reference_wind_speed_max .= buffers.wind_speed .* shear
     return nothing
 end
 function derive!(::Reference{WindSpeed{Minimum}}, buffers, ctx)
-    @. buffers.reference_wind_min = buffers.reference_wind_max * 0.1
+    buffers.reference_wind_speed_min .= buffers.reference_wind_speed_max .* 0.1
+    return nothing
+end
+function derive!(::Reference{WindSpeed{Mean}}, buffers, ctx)
+    buffers.reference_wind_speed_mean .= (buffers.reference_wind_speed_min .+ buffers.reference_wind_speed_max) ./ 2
     return nothing
 end
 function derive!(::CloudCover, buffers, ctx)
@@ -1328,11 +1340,15 @@ function derive!(::CloudCover, buffers, ctx)
     return nothing
 end
 function derive!(::CloudCover{Minimum}, buffers, ctx)
-    @. buffers.cloud_min = clamp(buffers.cloud_cover * 0.5, 0.0, 1.0)
+    buffers.cloud_cover_min .= clamp.(buffers.cloud_cover .* 0.5, 0.0, 1.0)
     return nothing
 end
 function derive!(::CloudCover{Maximum}, buffers, ctx)
-    @. buffers.cloud_max = clamp(buffers.cloud_cover * 2.0, 0.0, 1.0)
+    buffers.cloud_cover_max .= clamp.(buffers.cloud_cover .* 2.0, 0.0, 1.0)
+    return nothing
+end
+function derive!(::CloudCover{Mean}, buffers, ctx)
+    buffers.cloud_cover_mean .= (buffers.cloud_cover_min .+ buffers.cloud_cover_max) ./ 2
     return nothing
 end
 function derive!(::SoilTemperature{Mean}, buffers, ctx)
@@ -1387,7 +1403,7 @@ end
 _wind_height_correction(z_ref, z_src = 10.0u"m", α = 0.15) = (z_ref / z_src)^α
 
 @inline _air_temperature(b) =
-    hasproperty(b, :reference_temperature) ? b.reference_temperature : b.mean_temperature
+    hasproperty(b, :reference_temperature) ? b.reference_temperature : b.temperature_mean
 
 @inline function _lapse_correct!(out, src, ctx)
     (; site, grid_elevation, lapse_rate_model) = ctx
@@ -1404,13 +1420,13 @@ end
 function _relative_humidity_from_vpd!(
     out::AbstractVector,
     vapour_pressure_deficit::AbstractVector,
-    mean_temperature::AbstractVector,
+    temperature_mean::AbstractVector,
     reference_temperature::AbstractVector,
     method,
 )
     @inbounds for k in eachindex(out, vapour_pressure_deficit,
-                                 mean_temperature, reference_temperature)
-        saturation_at_mean = vapour_pressure(method, mean_temperature[k])
+                                 temperature_mean, reference_temperature)
+        saturation_at_mean = vapour_pressure(method, temperature_mean[k])
         actual = saturation_at_mean - vapour_pressure_deficit[k]
         if actual <= zero(actual)
             out[k] = 0.0

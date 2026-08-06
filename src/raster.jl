@@ -12,7 +12,7 @@
 #     replacing the corresponding source loader output entirely
 #   * single-layer — `dem`, `surface_albedo`, `roughness_height`, or any
 #     canonical weather variable name (e.g. `vapour_pressure_deficit`,
-#     `mean_temperature`), as a Raster in canonical units; resampled to the
+#     `temperature_mean`), as a Raster in canonical units; resampled to the
 #     run template at `init` time
 
 """
@@ -47,7 +47,7 @@ per-run data overrides.
     * collection sources: `weather` (RasterStack), `landcover` (Stack/Raster)
     * single layers: `dem`, `surface_albedo`, `roughness_height`, or any
       canonical weather-variable name (e.g. `vapour_pressure_deficit`,
-      `mean_temperature`, `cloud_cover`). Each as a `Raster` in canonical
+      `temperature_mean`, `cloud_cover`). Each as a `Raster` in canonical
       units; resampled to the run template automatically.
 """
 @kwdef struct MicroRasterProblem{M<:MicroMapModel,A,DT<:Union{Date,AbstractRange{Date}},T,SP<:SoilProfile,IT,D<:NamedTuple,TC<:Timestep}
