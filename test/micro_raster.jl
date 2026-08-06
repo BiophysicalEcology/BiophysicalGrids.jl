@@ -16,7 +16,7 @@ using Unitful
     for k in (:weather, :landcover, :dem, :surface_albedo, :roughness_height)
         @test _is_special_key(k)
     end
-    for k in (:vapour_pressure_deficit, :mean_temperature, :foo)
+    for k in (:vapour_pressure_deficit, :temperature_mean, :foo)
         @test !_is_special_key(k)
     end
 end
@@ -42,10 +42,10 @@ end
         weather = nothing,
         dem = rast,
         vapour_pressure_deficit = rast,
-        mean_temperature = rast,
+        temperature_mean = rast,
     )
     canonical = _canonical_data(data)
-    @test keys(canonical) == (:vapour_pressure_deficit, :mean_temperature)
+    @test keys(canonical) == (:vapour_pressure_deficit, :temperature_mean)
     @test canonical.vapour_pressure_deficit === rast
 end
 
