@@ -21,23 +21,28 @@
 # Output layer specs and per-pixel write
 # ---------------------------------------------------------------------------
 
-# A `LayerSpec{Name, Kind}` encodes both the result-field name and its storage
-# kind in its type, so each unrolled iteration specialises on a concrete type.
+# A `LayerSpec{Name, Kind, Source}` encodes the output raster's name, its
+# storage kind, and the result field it reads from (defaults to `Name`,
+# override with the 3-arg constructor when two kinds share a field name --
+# e.g. :profile and :canopy both have air_temperature/wind_speed/relative_humidity).
 # `Kind` is one of:
-#   :soil    — result.<Name> is a (Ti, Depth) matrix
-#   :profile — result.profile.<Name> is a (Ti, Height) matrix
-#   :scalar  — result.<Name> is a (Ti,) vector
+#   :soil    — result.<Source> is a (Ti, Depth) matrix
+#   :profile — result.profile.<Source> is a (Ti, Height) matrix
+#   :scalar  — result.<Source> is a (Ti,) vector
+#   :canopy  — result.canopy.<Source> is a (Ti, CanopyLayer) matrix; only the
+#              n_canopy_layers-wide fields fit (not the +1-wide boundary_* ones)
 # Number of azimuth directions used for horizon-angle computation. A
 # power of two makes the cardinal directions land on sample points.
 const N_HORIZON_ANGLES = 32
 
-struct LayerSpec{Name, Kind} end
-LayerSpec(name::Symbol, kind::Symbol) = LayerSpec{name, kind}()
+struct LayerSpec{Name, Kind, Source} end
+LayerSpec(name::Symbol, kind::Symbol, source::Symbol=name) = LayerSpec{name, kind, source}()
 
-@inline _layer_name(::LayerSpec{N}) where N = N
-@inline _layer_source(result, ::LayerSpec{N, :profile}) where N = getproperty(result.profile, N)
-@inline _layer_source(result, ::LayerSpec{N, :solar}) where N = getproperty(result.solar_radiation, N)
-@inline _layer_source(result, ::LayerSpec{N}) where N = getproperty(result, N)
+@inline _layer_name(::LayerSpec{N,K,S}) where {N,K,S} = N
+@inline _layer_source(result, ::LayerSpec{<:Any, :profile, S}) where S = getproperty(result.profile, S)
+@inline _layer_source(result, ::LayerSpec{<:Any, :solar, S}) where S = getproperty(result.solar_radiation, S)
+@inline _layer_source(result, ::LayerSpec{<:Any, :canopy, S}) where S = getproperty(result.canopy, S)
+@inline _layer_source(result, ::LayerSpec{<:Any, <:Any, S}) where S = getproperty(result, S)
 
 const _DEFAULT_OUTPUT_LAYERS = (
     LayerSpec(:soil_temperature, :soil),
@@ -61,6 +66,7 @@ preparing a stack for unit-free I/O (e.g. NetCDF).
 canonical_unit(name::Symbol)              = canonical_unit(Val(name))
 canonical_unit(::Val{:soil_temperature})  = u"°C"
 canonical_unit(::Val{:air_temperature})   = u"°C"
+canonical_unit(::Val{:leaf_temperature})  = u"°C"
 canonical_unit(::Val{:sky_temperature})   = u"°C"
 canonical_unit(::Val{:snow_depth})        = u"cm"
 canonical_unit(::Val{:wind_speed})        = u"m/s"
@@ -814,6 +820,7 @@ function _allocate_output(model::MicroModel, terrain, proto, layers::Tuple,
         profile = (ti, Dim{:height}(ustrip.(u"m", model.heights))),
         scalar = (ti,),
         solar = (ti,),
+        canopy = (ti, Dim{:canopy_layer}(1:Microclimate.n_canopy_layers(model.canopy_model, model.heights))),
     )
     return RasterStack(NamedTuple(map(layers) do spec
         _layer_name(spec) => _allocate_layer(proto, spec, spatial_dims, extra, mask)
@@ -835,7 +842,7 @@ function _ti_datetime_axis(anchor_dates::AbstractVector{Date}, hours::AbstractVe
     return out
 end
 
-function _allocate_layer(proto, spec::LayerSpec{<:Any, K}, spatial_dims, extra, mask) where K
+function _allocate_layer(proto, spec::LayerSpec{<:Any, K, <:Any}, spatial_dims, extra, mask) where K
     T = typeof(first(_layer_source(proto, spec)))
     ds = (spatial_dims..., extra[K]...)
     return _allocate_layer_array(T, ds, mask)
