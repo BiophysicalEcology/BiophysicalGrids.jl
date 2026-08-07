@@ -126,8 +126,13 @@ extents and time ranges — pair with a `MicroRasterProblem` (grid) or
   solar radiation rasters are written alongside (or instead of) microclimate
   output. Each layer may request broadband or a waveband integral. Predefined
   constants: `SOLAR_BROADBAND`, `SOLAR_PAR`, `SOLAR_UVB`, `SOLAR_NIR`.
+- `routing_model::RoutingModel` — optional lateral flow model (e.g.
+  `SurfaceRunoffRouting`). When set (grid mode only), surface water is routed
+  downslope along a topographic flow graph and fed into each downstream
+  column's water balance, and a `runoff_generated` layer is added to the
+  output. `nothing` (default) runs every pixel independently as before.
 """
-@kwdef struct MicroMapModel{MM,DS,WS,LCS,SAS,RHS,SMS,OL,LRT,SOL}
+@kwdef struct MicroMapModel{MM,DS,WS,LCS,SAS,RHS,SMS,OL,LRT,SOL,RM}
     micro_model::MM
     dem_source::DS
     weather_source::WS
@@ -141,6 +146,7 @@ extents and time ranges — pair with a `MicroRasterProblem` (grid) or
     solar_only::Bool = false
     cloud_correct_solar::Bool = false
     solar_output_layers::SOL = ()
+    routing_model::RM = nothing
 end
 
 # Per-run workspace built by `init(problem)`. Holds the spatially-extracted
@@ -152,7 +158,7 @@ end
 # the spatial dim differs (`(X, Y)` vs `(Dim{:point},)`); every solve-time
 # code path indexes via `I::Tuple` of dim wrappers from `DimIndices`, so the
 # loop body is mode-agnostic.
-mutable struct MicroMapCache{P,W,T,A,R,CO,M,POOL,SC,CC}
+mutable struct MicroMapCache{P,W,T,A,R,CO,M,POOL,SC,CC,RT}
     problem::P                       # MicroRasterProblem/MicroVectorProblem
     weather::W                       # RasterStack
     terrain::T                       # RasterStack
@@ -163,6 +169,7 @@ mutable struct MicroMapCache{P,W,T,A,R,CO,M,POOL,SC,CC}
     cache_pool::POOL                 # Channel{(; micro::MicroCache, scratch)}
     init_inputs::SC                  # Resolved initial conditions + build_inputs closure
     cloud_constants::CC              # Shared SolarRadiation constants
+    routing::RT                      # nothing, or a RoutingState (grid mode w/ routing_model)
 end
 
 """
@@ -402,7 +409,9 @@ function _build_inputs_and_pool(;
     @info "model: wind:            reference height $(wind_tgt) m, power law-corrected from 10 m (source)"
     @info "model: threads:         $(Threads.nthreads())"
 
-    function build_inputs(scratch, I::Tuple)
+    # Routing state (`lateral_inflow`, `max_surface_pool`) is passed in by the routed
+    # scheduler per cell; both default to `nothing` (uncoupled column solve).
+    function build_inputs(scratch, I::Tuple; lateral_inflow = nothing, max_surface_pool = nothing)
         horizon_angles = terrain.horizon_angles[I...]
         site = Site(;
             elevation = terrain.elevation[I...],
@@ -438,6 +447,8 @@ function _build_inputs_and_pool(;
             initial_snow_depth = something(init_inputs.snow_depth, 0.0u"cm"),
             initial_snow_temperature = something(init_inputs.snow_temperature, u"K"(0.0u"°C")),
             initial_snow_density = init_inputs.snow_density,
+            lateral_inflow,
+            max_surface_pool,
         )
     end
 
@@ -446,8 +457,10 @@ function _build_inputs_and_pool(;
         error("All pixels are masked or have missing weather data (ocean?).")
     first_I = DimIndices(terrain.elevation)[ci]
     npixels = length(terrain.elevation)
-    build_cache() = let scratch = allocate_scratch()
-        (micro = CommonSolve.init(MicroProblem(micro_model, build_inputs(scratch, first_I); days, time_mode)),
+    # Each worker gets its own model copy: some sub-models carry mutable per-solve
+    # state (e.g. `DynamicSoilMoisture.soil_wetness`) that would race if shared.
+    build_cache() = let scratch = allocate_scratch(), worker_model = deepcopy(micro_model)
+        (micro = CommonSolve.init(MicroProblem(worker_model, build_inputs(scratch, first_I); days, time_mode)),
          scratch)
     end
 
@@ -560,7 +573,13 @@ function _solve_proto_pixel!(cache)
     error("No pixel solved successfully — all pixels are masked, ocean, or have invalid weather data.")
 end
 
-function _solve_remaining!(output, solar_output, cache, proto, first_I)
+# Solve every pixel after the proto, dispatching on whether lateral routing is active
+# (`::RoutingState` method lives in routing.jl).
+_solve_remaining!(output, solar_output, cache, proto, first_I) =
+    _solve_remaining!(cache.routing, output, solar_output, cache, proto, first_I)
+
+# No routing: independent per-pixel loop.
+function _solve_remaining!(::Nothing, output, solar_output, cache, proto, first_I)
     cache_pool = cache.cache_pool
     layers = cache.problem.model.output_layers
     build_inputs = cache.init_inputs.build_inputs
