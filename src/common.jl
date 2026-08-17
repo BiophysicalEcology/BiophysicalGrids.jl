@@ -50,7 +50,11 @@ const _DEFAULT_OUTPUT_LAYERS = (
     LayerSpec(:air_temperature, :profile),
     LayerSpec(:relative_humidity, :profile),
     LayerSpec(:wind_speed, :profile),
-    LayerSpec(:surface_water, :scalar),
+    LayerSpec(:ground_surface_water, :scalar),
+    LayerSpec(:ground_dew, :scalar),
+    LayerSpec(:ground_frost, :scalar),
+    LayerSpec(:ground_standing_dew, :scalar),
+    LayerSpec(:ground_standing_frost, :scalar),
     LayerSpec(:global_radiation, :scalar),
     LayerSpec(:sky_temperature, :scalar),
     LayerSpec(:snow_depth, :scalar),
@@ -70,7 +74,16 @@ canonical_unit(::Val{:leaf_temperature})  = u"°C"
 canonical_unit(::Val{:sky_temperature})   = u"°C"
 canonical_unit(::Val{:snow_depth})        = u"cm"
 canonical_unit(::Val{:wind_speed})        = u"m/s"
-canonical_unit(::Val{:surface_water})     = u"kg/m^2"
+canonical_unit(::Val{:ground_surface_water}) = u"kg/m^2"
+canonical_unit(::Val{:ground_dew})           = u"kg/m^2"
+canonical_unit(::Val{:ground_frost})         = u"kg/m^2"
+canonical_unit(::Val{:ground_standing_dew})  = u"kg/m^2"
+canonical_unit(::Val{:ground_standing_frost}) = u"kg/m^2"
+canonical_unit(::Val{:leaf_surface_water})   = u"kg/m^2"
+canonical_unit(::Val{:leaf_dew})             = u"kg/m^2"
+canonical_unit(::Val{:leaf_frost})           = u"kg/m^2"
+canonical_unit(::Val{:leaf_standing_dew})    = u"kg/m^2"
+canonical_unit(::Val{:leaf_standing_frost})  = u"kg/m^2"
 canonical_unit(::Val{:global_radiation})  = u"W/m^2"
 canonical_unit(::Val{:soil_moisture})     = u"m^3/m^3"
 canonical_unit(::Val{:relative_humidity}) = u"percent"
