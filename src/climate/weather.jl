@@ -404,22 +404,25 @@ _contiguous_series_open(cloud_source, long_name) = error(
 
 # lon/lat/time index ranges for `area`/`time_start`/`time_end` within one
 # store's coords -- shared by the single-store and multi-group loaders.
-function _contiguous_series_indices(coords, area::Extent, time_start::DateTime, time_end::DateTime)
+# `findall` (not a direction-assuming findfirst/findlast pair) so this works
+# regardless of whether a store's lon/lat run ascending or descending --
+# GCP ARCO-ERA5 and ECMWF's own ARCO stores don't agree on either axis.
+function _contiguous_series_indices(source::Type, coords, area::Extent, time_start::DateTime, time_end::DateTime)
     hstart = Dates.value(time_start - coords.epoch) ÷ 3_600_000
     hend = Dates.value(time_end - coords.epoch) ÷ 3_600_000
     ti = searchsortedfirst(coords.hours, hstart):searchsortedlast(coords.hours, hend)
 
-    # Longitude is stored 0..360; latitude is stored descending 90..-90.
-    lon360(x) = mod(x, 360)
-    xi = findfirst(>=(lon360(area.X[1])), coords.lon):findlast(<=(lon360(area.X[2])), coords.lon)
-    yi = findfirst(<=(area.Y[2]), coords.lat):findlast(>=(area.Y[1]), coords.lat)
+    load_area, _ = _native_lon_crop(longitude_convention(source), area)
+    lon_idxs = findall(x -> load_area.X[1] <= x <= load_area.X[2], coords.lon)
+    lat_idxs = findall(y -> area.Y[1] <= y <= area.Y[2], coords.lat)
+    xi, yi = first(lon_idxs):last(lon_idxs), first(lat_idxs):last(lat_idxs)
     return (; xi, yi, ti, xs = coords.lon[xi], ys = coords.lat[yi])
 end
 
 function _load_contiguous_series(source, fields::Tuple, area::Extent, time_start::DateTime, time_end::DateTime)
     cloud_source = getraster(source)
     coords = _contiguous_series_coords(cloud_source)
-    (; xi, yi, ti, xs, ys) = _contiguous_series_indices(coords, area, time_start, time_end)
+    (; xi, yi, ti, xs, ys) = _contiguous_series_indices(source, coords, area, time_start, time_end)
 
     layers = map(fields) do name
         @info "  loading $source $name..."
@@ -452,7 +455,7 @@ function _load_layers(::MultiGroupContiguousTimeSeries, source, fields::Tuple, a
         @info "  loading $source $name..."
         cloud_source = group_sources[native_group(source, name)]
         coords = _contiguous_series_coords(cloud_source)
-        (; xi, yi, ti, xs, ys) = _contiguous_series_indices(coords, area, time_start, time_end)
+        (; xi, yi, ti, xs, ys) = _contiguous_series_indices(source, coords, area, time_start, time_end)
         long_name = layername(source, name)
         raw = _contiguous_series_open(cloud_source, long_name)
         data = raw[xi, yi, ti]
