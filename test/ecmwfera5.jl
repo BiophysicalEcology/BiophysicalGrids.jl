@@ -38,11 +38,9 @@ end
 end
 
 @testset "_contiguous_series_indices lon/lat conventions" begin
-    # A real run first hit a MethodError here: the lon 0-360 wraparound and
-    # descending-latitude assumptions baked into this function only hold for
-    # the old GCP ARCO-ERA5 store, not ECMWF's own stores (ascending lat,
-    # -180..180 lon). Cover both conventions directly with synthetic coords
-    # so this doesn't regress silently again.
+    # Lon 0-360 wraparound and descending latitude only hold for GCP
+    # ARCO-ERA5, not ECMWF's own stores (ascending, -180..180). Cover both
+    # with synthetic coords.
     epoch = DateTime(1970, 1, 1)
     hours = collect(0:23)  # one day, hourly
     time_start = epoch + Hour(0)

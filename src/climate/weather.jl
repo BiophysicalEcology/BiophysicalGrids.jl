@@ -386,9 +386,8 @@ function _load_layers(::DailyFiles, source, fields::Tuple, area::Extent, years)
 end
 # ARCO-ERA5's Zarr dims come back as bare integer NoLookups (no real
 # coordinate values), so coordinates are read directly from the store —
-# see ext/MicroclimateMapperZarrExt. Dispatches on the whole cloud source
-# object (not its bare `.url`) so an authenticated source (a distinct type)
-# can get a different implementation from the public GCP one.
+# see ext/MicroclimateMapperZarrExt. Dispatches on the cloud source object,
+# not its bare `.url`, so an authenticated source gets its own method.
 function _contiguous_series_coords end
 _contiguous_series_coords(cloud_source) = error(
     "loading a ContiguousTimeSeries source (e.g. ERA5) requires `using ZarrDatasets`",
@@ -402,11 +401,9 @@ _contiguous_series_open(cloud_source, long_name) = error(
     "loading a ContiguousTimeSeries source (e.g. ERA5) requires `using ZarrDatasets`",
 )
 
-# lon/lat/time index ranges for `area`/`time_start`/`time_end` within one
-# store's coords -- shared by the single-store and multi-group loaders.
-# `findall` (not a direction-assuming findfirst/findlast pair) so this works
-# regardless of whether a store's lon/lat run ascending or descending --
-# GCP ARCO-ERA5 and ECMWF's own ARCO stores don't agree on either axis.
+# lon/lat/time index ranges for one store's coords -- shared by the
+# single-store and multi-group loaders. `findall`, not a direction-assuming
+# findfirst/findlast pair, since stores disagree on ascending vs descending.
 function _contiguous_series_indices(source::Type, coords, area::Extent, time_start::DateTime, time_end::DateTime)
     hstart = Dates.value(time_start - coords.epoch) ÷ 3_600_000
     hend = Dates.value(time_end - coords.epoch) ÷ 3_600_000
