@@ -386,9 +386,11 @@ function _load_layers(::DailyFiles, source, fields::Tuple, area::Extent, years)
 end
 # ARCO-ERA5's Zarr dims come back as bare integer NoLookups (no real
 # coordinate values), so coordinates are read directly from the store —
-# see ext/MicroclimateMapperZarrExt.
+# see ext/MicroclimateMapperZarrExt. Dispatches on the whole cloud source
+# object (not its bare `.url`) so an authenticated source (a distinct type)
+# can get a different implementation from the public GCP one.
 function _contiguous_series_coords end
-_contiguous_series_coords(url) = error(
+_contiguous_series_coords(cloud_source) = error(
     "loading a ContiguousTimeSeries source (e.g. ERA5) requires `using ZarrDatasets`",
 )
 
@@ -396,14 +398,13 @@ _contiguous_series_coords(url) = error(
 # this store's arrays, so named variables are opened directly instead —
 # see ext/MicroclimateMapperZarrExt.
 function _contiguous_series_open end
-_contiguous_series_open(url, long_name) = error(
+_contiguous_series_open(cloud_source, long_name) = error(
     "loading a ContiguousTimeSeries source (e.g. ERA5) requires `using ZarrDatasets`",
 )
 
-function _load_contiguous_series(source, fields::Tuple, area::Extent, time_start::DateTime, time_end::DateTime)
-    cloud_source = getraster(source)
-    coords = _contiguous_series_coords(cloud_source.url)
-
+# lon/lat/time index ranges for `area`/`time_start`/`time_end` within one
+# store's coords -- shared by the single-store and multi-group loaders.
+function _contiguous_series_indices(coords, area::Extent, time_start::DateTime, time_end::DateTime)
     hstart = Dates.value(time_start - coords.epoch) ÷ 3_600_000
     hend = Dates.value(time_end - coords.epoch) ÷ 3_600_000
     ti = searchsortedfirst(coords.hours, hstart):searchsortedlast(coords.hours, hend)
@@ -412,12 +413,18 @@ function _load_contiguous_series(source, fields::Tuple, area::Extent, time_start
     lon360(x) = mod(x, 360)
     xi = findfirst(>=(lon360(area.X[1])), coords.lon):findlast(<=(lon360(area.X[2])), coords.lon)
     yi = findfirst(<=(area.Y[2]), coords.lat):findlast(>=(area.Y[1]), coords.lat)
-    xs, ys = coords.lon[xi], coords.lat[yi]
+    return (; xi, yi, ti, xs = coords.lon[xi], ys = coords.lat[yi])
+end
+
+function _load_contiguous_series(source, fields::Tuple, area::Extent, time_start::DateTime, time_end::DateTime)
+    cloud_source = getraster(source)
+    coords = _contiguous_series_coords(cloud_source)
+    (; xi, yi, ti, xs, ys) = _contiguous_series_indices(coords, area, time_start, time_end)
 
     layers = map(fields) do name
         @info "  loading $source $name..."
         long_name = layername(source, name)
-        raw = _contiguous_series_open(cloud_source.url, long_name)
+        raw = _contiguous_series_open(cloud_source, long_name)
         data = raw[xi, yi, ti]
         Raster(data, (X(xs), Y(ys), Ti(1:length(ti))); crs = EPSG(4326), name)
     end
@@ -428,6 +435,30 @@ function _load_layers(::ContiguousTimeSeries, source, fields::Tuple, area::Exten
     time_start = DateTime(first(years), 1, 1, 0)
     time_end = DateTime(last(years), 12, 31, 23)
     _load_contiguous_series(source, fields, area, time_start, time_end)
+end
+
+# A source whose fields span several separate base stores (e.g. ECMWFERA5Land's
+# per-topic-group Zarr stores) rather than one shared store. `native_group`
+# resolves each field to its group; one `getraster` call per distinct group.
+struct MultiGroupContiguousTimeSeries <: Loader end
+function native_group end
+
+function _load_layers(::MultiGroupContiguousTimeSeries, source, fields::Tuple, area::Extent, years)
+    time_start = DateTime(first(years), 1, 1, 0)
+    time_end = DateTime(last(years), 12, 31, 23)
+    groups = unique(map(f -> native_group(source, f), fields))
+    group_sources = Dict(g => getraster(source, g) for g in groups)
+    layers = map(fields) do name
+        @info "  loading $source $name..."
+        cloud_source = group_sources[native_group(source, name)]
+        coords = _contiguous_series_coords(cloud_source)
+        (; xi, yi, ti, xs, ys) = _contiguous_series_indices(coords, area, time_start, time_end)
+        long_name = layername(source, name)
+        raw = _contiguous_series_open(cloud_source, long_name)
+        data = raw[xi, yi, ti]
+        Raster(data, (X(xs), Y(ys), Ti(1:length(ti))); crs = EPSG(4326), name)
+    end
+    return NamedTuple{fields}(layers)
 end
 
 """

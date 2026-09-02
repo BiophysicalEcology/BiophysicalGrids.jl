@@ -7,4 +7,5 @@ using Test
     @testset "micro raster"   begin include("micro_raster.jl") end
     @testset "micro vector"   begin include("micro_vector.jl") end
     @testset "soil pedotransfer" begin include("soil_pedotransfer.jl") end
+    @testset "ecmwfera5"      begin include("ecmwfera5.jl") end
 end

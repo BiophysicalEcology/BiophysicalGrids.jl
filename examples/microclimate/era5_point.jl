@@ -9,6 +9,7 @@
 #   using Pkg; Pkg.add(["Plots", "CSV", "DataFrames"])
 
 using MicroclimateMapper
+using RasterDataSources
 using Microclimate: example_microclimate_problem, example_soil_profile
 using Rasters
 using Unitful
@@ -17,6 +18,10 @@ using GeoInterface: Wrappers as GIW
 
 point = GIW.Point((-89.4557, 43.1379))
 dates = Date(2000, 1, 1):Day(1):Date(2000, 12, 31)
+
+# `ERA5` (public, no CDS key) or `ECMWFERA5Land` (needs a CDS key, ~9km
+# resolution where available -- see RasterDataSources._cds_credentials).
+weather_source = ERA5
 
 # ---------------------------------------------------------------------------
 # Build the model
@@ -28,7 +33,7 @@ inner = example_microclimate_problem().model
 model = MicroMapModel(;
     micro_model = inner,
     dem_source = SRTM,
-    weather_source = ERA5,
+    weather_source,
 )
 
 # ---------------------------------------------------------------------------
