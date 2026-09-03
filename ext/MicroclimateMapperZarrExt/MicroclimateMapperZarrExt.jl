@@ -22,16 +22,15 @@ end
 MicroclimateMapper._contiguous_series_open(source::RasterDataSources.CachedCloudSource, long_name::AbstractString) =
     Zarr.zopen(source.url * "/" * long_name)
 
-# ECMWFERA5/ECMWFERA5Land: authenticated CDS access, same coords/open shape
-# but via RasterDataSources.open_zarr_array (injects the CDS bearer token
-# Zarr.jl's own store can't send).
+# ECMWFERA5/ECMWFERA5Land: authenticated CDS access via
+# RasterDataSources.open_zarr_store, which disk-caches chunks (open_zarr_array
+# doesn't -- fine for a one-off array but far too slow for a full time series).
 function MicroclimateMapper._contiguous_series_coords(source::RasterDataSources.CDSZarrSource)
-    hours_arr = RasterDataSources.open_zarr_array(source, "time")
-    lat_arr = RasterDataSources.open_zarr_array(source, "latitude")
-    lon_arr = RasterDataSources.open_zarr_array(source, "longitude")
+    ds = RasterDataSources.open_zarr_store(source)
+    hours_arr, lat_arr, lon_arr = ds.arrays["time"], ds.arrays["latitude"], ds.arrays["longitude"]
     (; hours = hours_arr[:], epoch = _parse_cf_epoch(hours_arr.attrs["units"]), lat = lat_arr[:], lon = lon_arr[:])
 end
 MicroclimateMapper._contiguous_series_open(source::RasterDataSources.CDSZarrSource, long_name::AbstractString) =
-    RasterDataSources.open_zarr_array(source, long_name)
+    RasterDataSources.open_zarr_store(source).arrays[long_name]
 
 end
