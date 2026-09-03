@@ -444,7 +444,7 @@ function _load_layers(::ContiguousTimeSeries, source, fields::Tuple, area::Exten
     _load_contiguous_series(source, fields, area, time_start, time_end)
 end
 
-# A source whose fields span several separate base stores (e.g. ECMWFERA5Land's
+# A source whose fields span several separate base stores (e.g. ERA5ECMWFLand's
 # per-topic-group Zarr stores) rather than one shared store. `native_group`
 # resolves each field to its group; one `getraster` call per distinct group.
 struct MultiGroupContiguousTimeSeries <: Loader end

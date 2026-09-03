@@ -45,7 +45,7 @@ FluidProperties = {rev = "main", url = "https://github.com/BiophysicalEcology/Fl
 HeatExchange = {rev = "main", url = "https://github.com/BiophysicalEcology/HeatExchange.jl"}
 Microclimate = {rev = "canopy", url = "https://github.com/BiophysicalEcology/Microclimate.jl"}
 PointDataSources = {rev = "main", url = "https://github.com/BiophysicalEcology/PointDataSources.jl"}
-RasterDataSources = {rev = "barra-soilgrids", url = "https://github.com/mrke/RasterDataSources.jl"}
+RasterDataSources = {rev = "franken-branch", url = "https://github.com/mrke/RasterDataSources.jl"}
 Rasters = {rev = "rasterdatasources-0.8-compat", url = "https://github.com/mrke/Rasters.jl"}
 SolarRadiation = {rev = "main", url = "https://github.com/BiophysicalEcology/SolarRadiation.jl"}
 

@@ -1,19 +1,19 @@
-# ECMWFERA5/ECMWFERA5Land bindings — ECMWF's own authenticated ARCO Zarr
-# stores (needs a CDS API key, same as CDSERA5), queue-free unlike CDSERA5.
+# ERA5ECMWF/ERA5ECMWFLand bindings — ECMWF's own authenticated ARCO Zarr
+# stores (needs a CDS API key, same as ERA5CDS), queue-free unlike ERA5CDS.
 
-weather_calendar(::Type{<:ECMWFERA5}) = Daily()
-native_timestep(::Type{<:ECMWFERA5}) = Hourly()
-# Not ContiguousTimeSeries: unlike GCP's monolithic ERA5, getraster(ECMWFERA5)
+weather_calendar(::Type{<:ERA5ECMWF}) = Daily()
+native_timestep(::Type{<:ERA5ECMWF}) = Hourly()
+# Not ContiguousTimeSeries: unlike GCP's monolithic ERA5, getraster(ERA5ECMWF)
 # (no layer) resolves to RasterDataSources.jl's generic `getraster(T) =
-# getraster(T, layers(T))` fallback, and layers(ECMWFERA5) is its topic
+# getraster(T, layers(T))` fallback, and layers(ERA5ECMWF) is its topic
 # groups (:sfc, :wav) -- a NamedTuple of both, not one usable source.
-loader(::Type{<:ECMWFERA5}) = MultiGroupContiguousTimeSeries()
-native_group(::Type{<:ECMWFERA5}, ::Symbol) = :sfc  # every field lives here, not :wav
+loader(::Type{<:ERA5ECMWF}) = MultiGroupContiguousTimeSeries()
+native_group(::Type{<:ERA5ECMWF}, ::Symbol) = :sfc  # every field lives here, not :wav
 # Default points_load_buffer (2°) is tuned for ~1.9° grids; at ERA5's ~0.25°
 # spacing that pulls in an 8x8 cell block per point instead of a handful.
-points_load_buffer(::Type{<:ECMWFERA5}) = 0.5
+points_load_buffer(::Type{<:ERA5ECMWF}) = 0.5
 
-function variables(::Type{<:ECMWFERA5})
+function variables(::Type{<:ERA5ECMWF})
     (
         Variable(Reference(Temperature()), :t2m, u"K"),
         Variable(EastwardWindSpeed(), :u10, u"m/s"),
@@ -30,18 +30,18 @@ function variables(::Type{<:ECMWFERA5})
     )
 end
 
-init_variables(::Type{<:ECMWFERA5}) = variables(ECMWFERA5)
+init_variables(::Type{<:ERA5ECMWF}) = variables(ERA5ECMWF)
 
-weather_calendar(::Type{<:ECMWFERA5Land}) = Daily()
-native_timestep(::Type{<:ECMWFERA5Land}) = Hourly()
-loader(::Type{<:ECMWFERA5Land}) = MultiGroupContiguousTimeSeries()
+weather_calendar(::Type{<:ERA5ECMWFLand}) = Daily()
+native_timestep(::Type{<:ERA5ECMWFLand}) = Hourly()
+loader(::Type{<:ERA5ECMWFLand}) = MultiGroupContiguousTimeSeries()
 # At ERA5-Land's ~9km (~0.1°) spacing, the 2° default pulls a ~40x40 cell
 # block per point -- hundreds of MB of chunks for a single point's series.
-points_load_buffer(::Type{<:ECMWFERA5Land}) = 0.2
-fallback_source(::Type{<:ECMWFERA5Land}) = ECMWFERA5
-fallback_layers(::Type{<:ECMWFERA5Land}) = (:cloud_cover,)  # Land has no cloud-cover group
+points_load_buffer(::Type{<:ERA5ECMWFLand}) = 0.2
+fallback_source(::Type{<:ERA5ECMWFLand}) = ERA5ECMWF
+fallback_layers(::Type{<:ERA5ECMWFLand}) = (:cloud_cover,)  # Land has no cloud-cover group
 
-function variables(::Type{<:ECMWFERA5Land})
+function variables(::Type{<:ERA5ECMWFLand})
     (
         Variable(Reference(Temperature()), :t2m, u"K"),
         Variable(DewpointTemperature(), :d2m, u"K"),
@@ -54,20 +54,20 @@ function variables(::Type{<:ECMWFERA5Land})
     )
 end
 
-# Which ECMWFERA5Land Zarr store each field lives in -- all groupings
+# Which ERA5ECMWFLand Zarr store each field lives in -- all groupings
 # confirmed live.
-function native_group(::Type{<:ECMWFERA5Land}, f::Symbol)
+function native_group(::Type{<:ERA5ECMWFLand}, f::Symbol)
     f in (:t2m, :d2m) && return :sfc_2m_temperature
     f in (:u10, :v10) && return :sfc_wind
     f in (:sp, :tp) && return :sfc_pressure_precipitation
     f in (:ssrd, :strd) && return :sfc_radiation_heat
     f === :stl1 && return :sfc_soil_temperature
     f === :swvl1 && return :sfc_soil_water
-    error("no ECMWFERA5Land group declared for field :$f")
+    error("no ERA5ECMWFLand group declared for field :$f")
 end
 
-init_variables(::Type{<:ECMWFERA5Land}) = (
-    variables(ECMWFERA5Land)...,
+init_variables(::Type{<:ERA5ECMWFLand}) = (
+    variables(ERA5ECMWFLand)...,
     Variable(SoilTemperature(Mean()), :stl1, u"K"),
     Variable(SoilMoisture(), :swvl1, 1),
 )

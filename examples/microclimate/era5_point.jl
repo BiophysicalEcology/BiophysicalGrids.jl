@@ -18,9 +18,9 @@ ENV["RASTERDATASOURCES_PATH"] = "your folder"
 points = [geocode("Mount Stirling, Victoria"),]#GIW.Point((135.0, -30.0))
 dates = Date(2025, 1, 1):Day(1):Date(2025, 12, 31)
 
-# `ERA5` (public, no CDS key) or `ECMWFERA5Land` (needs a CDS key, ~9km
+# `ERA5` (public, no CDS key) or `ERA5ECMWFLand` (needs a CDS key, ~9km
 # resolution where available -- see RasterDataSources._cds_credentials).
-weather_source = ECMWFERA5Land
+weather_source = ERA5ECMWFLand
 
 # ---------------------------------------------------------------------------
 # Build the model
@@ -47,7 +47,7 @@ model = MicroMapModel(;
     micro_model,
     dem_source = SRTM,
     weather_source,
-    init_source = ECMWFERA5Land, # uses ERA5 soil temperature and moisture as initial condition
+    init_source = ERA5ECMWFLand, # uses ERA5 soil temperature and moisture as initial condition
     surface_albedo_source   = 0.15,
     roughness_height_source = 0.004u"m",    
 )

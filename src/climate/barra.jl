@@ -22,9 +22,11 @@ end
 
 # BARRA's own `:orog` grid as the DEM — same role as CRUCL2's `:elv`. 0.3°
 # buffer matches SRTM's, comfortably wider than a BARRA-R2 cell (~11 km).
-function _load_dem(T::Type{<:BARRA}, area::Extent)
+# `:orog` only exists under the `Static` frequency parameter (RasterDataSources
+# `BARRA{P,D,Static}`), not under `T`'s own (possibly Hourly/Daily/Monthly) one.
+function _load_dem(T::Type{<:BARRA{P,D}}, area::Extent) where {P,D}
     buffered = Extents.buffer(area, (X = 0.3, Y = 0.3))
-    path = getraster(T, :orog)
+    path = getraster(BARRA{P,D,RasterDataSources.Static}, :orog)
     orog = read(crop(Raster(path; name = :orog, lazy = true); to = buffered, touches = true))
     return Rasters.replace_missing(orog, 0)
 end
