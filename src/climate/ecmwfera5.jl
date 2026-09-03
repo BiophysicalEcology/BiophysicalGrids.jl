@@ -22,11 +22,7 @@ function variables(::Type{<:ECMWFERA5})
     )
 end
 
-init_variables(::Type{<:ECMWFERA5}) = (
-    variables(ECMWFERA5)...,
-    Variable(SoilTemperature(Mean()), :stl1, u"K"),
-    Variable(SoilMoisture(), :swvl1, 1),
-)
+init_variables(::Type{<:ECMWFERA5}) = variables(ECMWFERA5)
 
 weather_calendar(::Type{<:ECMWFERA5Land}) = Daily()
 native_timestep(::Type{<:ECMWFERA5Land}) = Hourly()
@@ -47,9 +43,8 @@ function variables(::Type{<:ECMWFERA5Land})
     )
 end
 
-# Which ECMWFERA5Land Zarr store each field lives in. Unverified against a
-# live store (e.g. whether t2m/d2m really share sfc_2m_temperature) — see
-# examples/microclimate/era5_point.jl for the live check.
+# Which ECMWFERA5Land Zarr store each field lives in. t2m/d2m and u10/v10
+# groupings confirmed live; sp/tp and ssrd/strd groupings not yet.
 function native_group(::Type{<:ECMWFERA5Land}, f::Symbol)
     f in (:t2m, :d2m) && return :sfc_2m_temperature
     f in (:u10, :v10) && return :sfc_wind

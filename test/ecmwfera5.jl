@@ -13,7 +13,7 @@ using Rasters.Extents: Extent
     @test native_timestep(ECMWFERA5) == Hourly()
     @test loader(ECMWFERA5) == ContiguousTimeSeries()
     @test length(variables(ECMWFERA5)) == 9
-    @test length(init_variables(ECMWFERA5)) == 11  # + stl1, swvl1
+    @test init_variables(ECMWFERA5) == variables(ECMWFERA5)  # no soil vars in :sfc
 end
 
 @testset "ECMWFERA5Land" begin
