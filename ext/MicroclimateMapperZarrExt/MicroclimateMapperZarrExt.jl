@@ -7,13 +7,20 @@ import RasterDataSources
 
 const Zarr = ZarrDatasets.Zarr
 
-_parse_cf_epoch(units) = DateTime(match(r"since (.+)$", units)[1], dateformat"yyyy-mm-dd HH:MM:SS")
+# Step unit varies by store -- ERA5-Land uses "hours since ...", ECMWFERA5's
+# own :sfc group uses "seconds since ..." (confirmed live); hardcoding hours
+# silently misreads one as the other.
+const _CF_TIME_STEP_MS = Dict("hours" => 3_600_000, "days" => 86_400_000, "minutes" => 60_000, "seconds" => 1_000)
+function _parse_cf_time(units)
+    step_name, epoch_str = match(r"^(hours|days|seconds|minutes) since (.+)$", units).captures
+    (; epoch = DateTime(epoch_str, dateformat"yyyy-mm-dd HH:MM:SS"), step_ms = _CF_TIME_STEP_MS[step_name])
+end
 
 function MicroclimateMapper._contiguous_series_coords(source::RasterDataSources.CachedCloudSource)
     hours_arr = Zarr.zopen(source.url * "/time")
     lat_arr = Zarr.zopen(source.url * "/latitude")
     lon_arr = Zarr.zopen(source.url * "/longitude")
-    (; hours = hours_arr[:], epoch = _parse_cf_epoch(hours_arr.attrs["units"]), lat = lat_arr[:], lon = lon_arr[:])
+    (; hours = hours_arr[:], _parse_cf_time(hours_arr.attrs["units"])..., lat = lat_arr[:], lon = lon_arr[:])
 end
 
 # `RasterStack(url; source=Zarrsource())`'s consolidated-metadata discovery
@@ -28,7 +35,7 @@ MicroclimateMapper._contiguous_series_open(source::RasterDataSources.CachedCloud
 function MicroclimateMapper._contiguous_series_coords(source::RasterDataSources.CDSZarrSource)
     ds = RasterDataSources.open_zarr_store(source)
     hours_arr, lat_arr, lon_arr = ds.arrays["time"], ds.arrays["latitude"], ds.arrays["longitude"]
-    (; hours = hours_arr[:], epoch = _parse_cf_epoch(hours_arr.attrs["units"]), lat = lat_arr[:], lon = lon_arr[:])
+    (; hours = hours_arr[:], _parse_cf_time(hours_arr.attrs["units"])..., lat = lat_arr[:], lon = lon_arr[:])
 end
 MicroclimateMapper._contiguous_series_open(source::RasterDataSources.CDSZarrSource, long_name::AbstractString) =
     RasterDataSources.open_zarr_store(source).arrays[long_name]

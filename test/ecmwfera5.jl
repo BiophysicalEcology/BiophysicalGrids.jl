@@ -54,7 +54,7 @@ end
 
     # GCP ERA5: lon 0..360, lat descending 90..-90. Query Wisconsin
     # (-89.4557) -> must wrap to ~270.5 via ERA5's Longitude360 trait.
-    gcp_coords = (; hours, epoch, lon = collect(0.0:1.0:359.0), lat = collect(90.0:-1.0:-90.0))
+    gcp_coords = (; hours, epoch, step_ms = 3_600_000, lon = collect(0.0:1.0:359.0), lat = collect(90.0:-1.0:-90.0))
     r = _contiguous_series_indices(ERA5, gcp_coords, buffered(-89.4557, 43.0), time_start, time_end)
     @test all(x -> 270.0 <= x <= 271.0, r.xs)
     @test all(y -> 42.0 <= y <= 44.0, r.ys)
@@ -62,9 +62,18 @@ end
 
     # ECMWF stores: lon -180..180, lat ascending -90..90 -- default
     # (Longitude180) convention, no wraparound, no direction assumption.
-    ecmwf_coords = (; hours, epoch, lon = collect(-180.0:1.0:179.0), lat = collect(-90.0:1.0:90.0))
+    ecmwf_coords = (; hours, epoch, step_ms = 3_600_000, lon = collect(-180.0:1.0:179.0), lat = collect(-90.0:1.0:90.0))
     r2 = _contiguous_series_indices(ECMWFERA5Land, ecmwf_coords, buffered(-89.4557, 43.0), time_start, time_end)
     @test all(x -> -90.0 <= x <= -88.0, r2.xs)
     @test all(y -> 42.0 <= y <= 44.0, r2.ys)
     @test length(r2.ti) == 6
+
+    # ECMWFERA5's own :sfc group reports "seconds since ..." (confirmed
+    # live), unlike ERA5-Land's "hours since ...". A hardcoded hour-step
+    # would misread this by 3600x -- regression test for that bug.
+    seconds = collect(0:3600:(23 * 3600))  # one day, hourly, but in seconds
+    seconds_coords = (; hours = seconds, epoch, step_ms = 1_000,
+        lon = collect(-180.0:1.0:179.0), lat = collect(-90.0:1.0:90.0))
+    r3 = _contiguous_series_indices(ECMWFERA5, seconds_coords, buffered(-89.4557, 43.0), time_start, time_end)
+    @test length(r3.ti) == 6
 end

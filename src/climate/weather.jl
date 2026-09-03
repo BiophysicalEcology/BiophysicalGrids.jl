@@ -411,8 +411,8 @@ _contiguous_series_open(cloud_source, long_name) = error(
 # single-store and multi-group loaders. `findall`, not a direction-assuming
 # findfirst/findlast pair, since stores disagree on ascending vs descending.
 function _contiguous_series_indices(source::Type, coords, area::Extent, time_start::DateTime, time_end::DateTime)
-    hstart = Dates.value(time_start - coords.epoch) ÷ 3_600_000
-    hend = Dates.value(time_end - coords.epoch) ÷ 3_600_000
+    hstart = Dates.value(time_start - coords.epoch) ÷ coords.step_ms
+    hend = Dates.value(time_end - coords.epoch) ÷ coords.step_ms
     ti = searchsortedfirst(coords.hours, hstart):searchsortedlast(coords.hours, hend)
 
     load_area, _ = _native_lon_crop(longitude_convention(source), area)
