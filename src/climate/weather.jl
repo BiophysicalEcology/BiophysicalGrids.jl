@@ -1085,10 +1085,10 @@ end
 @inline _non_static_vars_step(acc::Tuple, v, ::EnvSlot, rest::Tuple) =
     _non_static_vars((acc..., v), rest)
 
-# Native quantities only — `EnvDaily` ones live in `buffers.<name>` and
-# come from `_SERIES_DAILY`, so they must not appear in `buffers.native`.
+# Native quantities only — `EnvDaily` ones live in `buffers.<name>`, not here.
+# `_full_variables`, not `variables`: buffers need a slot for fallback fields too.
 @inline _native_quantities(source::Type) = _merge_unique(
-    map(quantity, vars_for(variables(source), EnvHourly())),
+    map(quantity, vars_for(_full_variables(source), EnvHourly())),
     (WindSpeed(), ActualVapourPressure(), Pressure()),
 )
 
