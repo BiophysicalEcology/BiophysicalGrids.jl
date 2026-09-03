@@ -148,6 +148,7 @@ struct Longitude360 <: LongitudeConvention end
 # sources should override: at ERA5-Land's ~9km spacing, the default buffer
 # pulls in a ~40x40 cell block per point instead of a handful.
 @inline points_load_buffer(::Type) = _POINTS_LOAD_BUFFER
+@inline points_load_buffer(::Nothing) = _POINTS_LOAD_BUFFER  # init_source is optional
 
 @inline _native_lon_crop(::Longitude180, area::Extent) = (area, identity)
 function _native_lon_crop(::Longitude360, area::Extent)
@@ -449,9 +450,7 @@ end
 struct MultiGroupContiguousTimeSeries <: Loader end
 function native_group end
 
-function _load_layers(::MultiGroupContiguousTimeSeries, source, fields::Tuple, area::Extent, years)
-    time_start = DateTime(first(years), 1, 1, 0)
-    time_end = DateTime(last(years), 12, 31, 23)
+function _load_multi_group_series(source, fields::Tuple, area::Extent, time_start::DateTime, time_end::DateTime)
     groups = unique(map(f -> native_group(source, f), fields))
     group_sources = Dict(g => getraster(source, g) for g in groups)
     layers = map(fields) do name
@@ -465,6 +464,12 @@ function _load_layers(::MultiGroupContiguousTimeSeries, source, fields::Tuple, a
         Raster(data, (X(xs), Y(ys), Ti(1:length(ti))); crs = EPSG(4326), name)
     end
     return NamedTuple{fields}(layers)
+end
+
+function _load_layers(::MultiGroupContiguousTimeSeries, source, fields::Tuple, area::Extent, years)
+    time_start = DateTime(first(years), 1, 1, 0)
+    time_end = DateTime(last(years), 12, 31, 23)
+    _load_multi_group_series(source, fields, area, time_start, time_end)
 end
 
 """
@@ -800,8 +805,8 @@ end
 # Cheap single-snapshot (X, Y) grid near `start_date`, for seeding initial
 # conditions from a source that isn't the run's `weather_source` (e.g. ERA5
 # seeding an NCEP/AWAP/SILO run). Not a time-varying forcing: a
-# ContiguousTimeSeries source is read for a single hour (see
-# _load_contiguous_series); other loaders read a single year.
+# ContiguousTimeSeries/MultiGroupContiguousTimeSeries sources are read for a
+# single hour; other loaders read a single year.
 function _load_init_snapshot(source, sample::Sample, area::Extent, start_date::Date)
     name = canonical_name(sample)
     var = _variable_for(init_variables(source), name)
@@ -809,6 +814,9 @@ function _load_init_snapshot(source, sample::Sample, area::Extent, start_date::D
     raw2d = if loader(source) isa ContiguousTimeSeries
         t0 = DateTime(start_date)
         first(values(_load_contiguous_series(source, (field,), area, t0, t0 + Hour(1))))[Ti(1)]
+    elseif loader(source) isa MultiGroupContiguousTimeSeries
+        t0 = DateTime(start_date)
+        first(values(_load_multi_group_series(source, (field,), area, t0, t0 + Hour(1))))[Ti(1)]
     else
         yr = year(start_date)
         first(values(_load_layers(loader(source), source, (field,), area, yr:yr)))[Ti(1)]

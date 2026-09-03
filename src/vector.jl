@@ -214,8 +214,8 @@ function CommonSolve.init(problem::MicroVectorProblem)
     # unless the user already supplied data.soil_moisture explicitly.
     # Skipped in solar-only mode — weather is not loaded (or is irrelevant).
     if !model.solar_only && soil_moisture_source !== nothing && !haskey(data, :soil_moisture)
-        sm_area = Extents.buffer(_points_extent(points),
-            (X = _POINTS_LOAD_BUFFER, Y = _POINTS_LOAD_BUFFER))
+        sm_buffer = points_load_buffer(soil_moisture_source)
+        sm_area = Extents.buffer(_points_extent(points), (X = sm_buffer, Y = sm_buffer))
         data = merge(data, (; soil_moisture = _load_prescribed(soil_moisture_source, SoilMoisture(), sm_area, years)))
     end
 
@@ -238,9 +238,10 @@ function CommonSolve.init(problem::MicroVectorProblem)
     area = _points_extent(points)
     points_dim = _make_points_dim(points)
 
+    init_buffer = points_load_buffer(init_source)
     init_soil_native = model.solar_only ? (; soil_temperature = nothing, soil_moisture = nothing) :
         _load_init_soil(init_source,
-            Extents.buffer(area, (X = _POINTS_LOAD_BUFFER, Y = _POINTS_LOAD_BUFFER)), first(dates_vec))
+            Extents.buffer(area, (X = init_buffer, Y = init_buffer)), first(dates_vec))
     init_soil = (;
         soil_temperature = init_soil_native.soil_temperature === nothing ?
             nothing : _to_points(init_soil_native.soil_temperature, points_dim),
