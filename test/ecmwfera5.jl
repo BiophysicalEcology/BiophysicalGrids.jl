@@ -3,17 +3,19 @@ using Dates
 using MicroclimateMapper
 using MicroclimateMapper: variables, init_variables, native_group, canonical_name,
     fallback_source, fallback_layers, weather_calendar, native_timestep, loader,
-    Daily, Hourly, ContiguousTimeSeries, MultiGroupContiguousTimeSeries,
-    _contiguous_series_indices
+    Daily, Hourly, MultiGroupContiguousTimeSeries, _contiguous_series_indices
 using RasterDataSources
 using Rasters.Extents: Extent
 
 @testset "ECMWFERA5" begin
     @test weather_calendar(ECMWFERA5) == Daily()
     @test native_timestep(ECMWFERA5) == Hourly()
-    @test loader(ECMWFERA5) == ContiguousTimeSeries()
+    @test loader(ECMWFERA5) == MultiGroupContiguousTimeSeries()
     @test length(variables(ECMWFERA5)) == 9
     @test init_variables(ECMWFERA5) == variables(ECMWFERA5)  # no soil vars in :sfc
+    for var in variables(ECMWFERA5)
+        @test native_group(ECMWFERA5, MicroclimateMapper.native_field(var)) == :sfc
+    end
 end
 
 @testset "ECMWFERA5Land" begin

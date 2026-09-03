@@ -3,7 +3,12 @@
 
 weather_calendar(::Type{<:ECMWFERA5}) = Daily()
 native_timestep(::Type{<:ECMWFERA5}) = Hourly()
-loader(::Type{<:ECMWFERA5}) = ContiguousTimeSeries()
+# Not ContiguousTimeSeries: unlike GCP's monolithic ERA5, getraster(ECMWFERA5)
+# (no layer) resolves to RasterDataSources.jl's generic `getraster(T) =
+# getraster(T, layers(T))` fallback, and layers(ECMWFERA5) is its topic
+# groups (:sfc, :wav) -- a NamedTuple of both, not one usable source.
+loader(::Type{<:ECMWFERA5}) = MultiGroupContiguousTimeSeries()
+native_group(::Type{<:ECMWFERA5}, ::Symbol) = :sfc  # every field lives here, not :wav
 # Default points_load_buffer (2°) is tuned for ~1.9° grids; at ERA5's ~0.25°
 # spacing that pulls in an 8x8 cell block per point instead of a handful.
 points_load_buffer(::Type{<:ECMWFERA5}) = 0.5
@@ -49,8 +54,8 @@ function variables(::Type{<:ECMWFERA5Land})
     )
 end
 
-# Which ECMWFERA5Land Zarr store each field lives in. t2m/d2m and u10/v10
-# groupings confirmed live; sp/tp and ssrd/strd groupings not yet.
+# Which ECMWFERA5Land Zarr store each field lives in -- all groupings
+# confirmed live.
 function native_group(::Type{<:ECMWFERA5Land}, f::Symbol)
     f in (:t2m, :d2m) && return :sfc_2m_temperature
     f in (:u10, :v10) && return :sfc_wind
