@@ -4,6 +4,9 @@
 weather_calendar(::Type{<:ECMWFERA5}) = Daily()
 native_timestep(::Type{<:ECMWFERA5}) = Hourly()
 loader(::Type{<:ECMWFERA5}) = ContiguousTimeSeries()
+# Default points_load_buffer (2°) is tuned for ~1.9° grids; at ERA5's ~0.25°
+# spacing that pulls in an 8x8 cell block per point instead of a handful.
+points_load_buffer(::Type{<:ECMWFERA5}) = 0.5
 
 function variables(::Type{<:ECMWFERA5})
     (
@@ -27,6 +30,9 @@ init_variables(::Type{<:ECMWFERA5}) = variables(ECMWFERA5)
 weather_calendar(::Type{<:ECMWFERA5Land}) = Daily()
 native_timestep(::Type{<:ECMWFERA5Land}) = Hourly()
 loader(::Type{<:ECMWFERA5Land}) = MultiGroupContiguousTimeSeries()
+# At ERA5-Land's ~9km (~0.1°) spacing, the 2° default pulls a ~40x40 cell
+# block per point -- hundreds of MB of chunks for a single point's series.
+points_load_buffer(::Type{<:ECMWFERA5Land}) = 0.2
 fallback_source(::Type{<:ECMWFERA5Land}) = ECMWFERA5
 fallback_layers(::Type{<:ECMWFERA5Land}) = (:cloud_cover,)  # Land has no cloud-cover group
 

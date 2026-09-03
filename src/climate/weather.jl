@@ -143,6 +143,12 @@ struct Longitude360 <: LongitudeConvention end
 
 @inline longitude_convention(::Type) = Longitude180()
 
+# Degree buffer for points-mode bounding-box loads (see `_POINTS_LOAD_BUFFER`
+# in vector.jl) -- default suits coarse grids (e.g. NCEP ~1.9°). Finer
+# sources should override: at ERA5-Land's ~9km spacing, the default buffer
+# pulls in a ~40x40 cell block per point instead of a handful.
+@inline points_load_buffer(::Type) = _POINTS_LOAD_BUFFER
+
 @inline _native_lon_crop(::Longitude180, area::Extent) = (area, identity)
 function _native_lon_crop(::Longitude360, area::Extent)
     (area.X[1] >= 0 && area.X[2] >= 0) && return (area, identity)
@@ -470,7 +476,8 @@ Download and cache `source` weather data for `points`' bounding area and
 cached, so a re-run resumes where it left off.
 """
 function prefetch_weather!(source::Type, points, dates; fields = layers(source), batch = Week(1))
-    area = Extents.buffer(_points_extent(points), (X = _POINTS_LOAD_BUFFER, Y = _POINTS_LOAD_BUFFER))
+    buffer = points_load_buffer(source)
+    area = Extents.buffer(_points_extent(points), (X = buffer, Y = buffer))
     date_start, date_end = extrema(dates)
     cache_dir = joinpath(RasterDataSources.rasterpath(source), "prefetch")
     mkpath(cache_dir)
@@ -502,7 +509,7 @@ function _load_field_at_points(source, name, points_dim; kw...)
 end
 
 function _load_layers_at_points(loader::Loader, source, fields::Tuple, points_dim, years)
-    area_layers = _load_layers(loader, source, fields, _points_bbox(points_dim), years)
+    area_layers = _load_layers(loader, source, fields, _points_bbox(source, points_dim), years)
     return NamedTuple{fields}(map(l -> _to_points(l, points_dim), values(area_layers)))
 end
 
@@ -708,18 +715,18 @@ function _load_canonical_points(source, names::Tuple, points_dim, years)
     static_stack = if isempty(static_fields)
         NamedTuple()
     else
-        area = _points_bbox(points_dim)
+        area = _points_bbox(source, points_dim)
         native = _load_static(source, static_fields, area)
         NamedTuple{static_fields}(map(l -> _to_points(l, points_dim), values(native)))
     end
     return _canonical_keyed(vars, merge(ti_stack, static_stack))
 end
 
-function _points_bbox(points_dim)
+function _points_bbox(source, points_dim)
     coords = lookup(points_dim)
     lons = first.(coords); lats = last.(coords)
-    return Extents.buffer(Extent(X = extrema(lons), Y = extrema(lats)),
-        (X = _POINTS_LOAD_BUFFER, Y = _POINTS_LOAD_BUFFER))
+    buffer = points_load_buffer(source)
+    return Extents.buffer(Extent(X = extrema(lons), Y = extrema(lats)), (X = buffer, Y = buffer))
 end
 
 # Compile-time partition of a variables tuple into (Ti-varying, static)

@@ -276,8 +276,8 @@ function CommonSolve.init(problem::MicroVectorProblem)
         weather_native = _load_weather_points(weather_source, points_dim, years)
         weather_native[Ti(ti_start:ti_end)]
     else
-        weather_area = Extents.buffer(area,
-            (X = _POINTS_LOAD_BUFFER, Y = _POINTS_LOAD_BUFFER))
+        weather_buffer = points_load_buffer(weather_source)
+        weather_area = Extents.buffer(area, (X = weather_buffer, Y = weather_buffer))
         weather_native = _resolve_weather(data, weather_source, weather_area, years)
         # Slice to the requested date range before per-point extraction —
         # positional Ti indexing works for both integer and DateTime Ti axes.
