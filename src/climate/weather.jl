@@ -143,6 +143,13 @@ struct Longitude360 <: LongitudeConvention end
 
 @inline longitude_convention(::Type) = Longitude180()
 
+# Degree buffer for points-mode bounding-box loads (see `_POINTS_LOAD_BUFFER`
+# in vector.jl) -- default suits coarse grids (e.g. NCEP ~1.9°). Finer
+# sources should override: at ERA5-Land's ~9km spacing, the default buffer
+# pulls in a ~40x40 cell block per point instead of a handful.
+@inline points_load_buffer(::Type) = _POINTS_LOAD_BUFFER
+@inline points_load_buffer(::Nothing) = _POINTS_LOAD_BUFFER  # init_source is optional
+
 @inline _native_lon_crop(::Longitude180, area::Extent) = (area, identity)
 function _native_lon_crop(::Longitude360, area::Extent)
     (area.X[1] >= 0 && area.X[2] >= 0) && return (area, identity)
@@ -386,9 +393,10 @@ function _load_layers(::DailyFiles, source, fields::Tuple, area::Extent, years)
 end
 # ARCO-ERA5's Zarr dims come back as bare integer NoLookups (no real
 # coordinate values), so coordinates are read directly from the store —
-# see ext/MicroclimateMapperZarrExt.
+# see ext/MicroclimateMapperZarrExt. Dispatches on the cloud source object,
+# not its bare `.url`, so an authenticated source gets its own method.
 function _contiguous_series_coords end
-_contiguous_series_coords(url) = error(
+_contiguous_series_coords(cloud_source) = error(
     "loading a ContiguousTimeSeries source (e.g. ERA5) requires `using ZarrDatasets`",
 )
 
@@ -396,28 +404,34 @@ _contiguous_series_coords(url) = error(
 # this store's arrays, so named variables are opened directly instead —
 # see ext/MicroclimateMapperZarrExt.
 function _contiguous_series_open end
-_contiguous_series_open(url, long_name) = error(
+_contiguous_series_open(cloud_source, long_name) = error(
     "loading a ContiguousTimeSeries source (e.g. ERA5) requires `using ZarrDatasets`",
 )
 
-function _load_contiguous_series(source, fields::Tuple, area::Extent, time_start::DateTime, time_end::DateTime)
-    cloud_source = getraster(source)
-    coords = _contiguous_series_coords(cloud_source.url)
-
-    hstart = Dates.value(time_start - coords.epoch) ÷ 3_600_000
-    hend = Dates.value(time_end - coords.epoch) ÷ 3_600_000
+# lon/lat/time index ranges for one store's coords -- shared by the
+# single-store and multi-group loaders. `findall`, not a direction-assuming
+# findfirst/findlast pair, since stores disagree on ascending vs descending.
+function _contiguous_series_indices(source::Type, coords, area::Extent, time_start::DateTime, time_end::DateTime)
+    hstart = Dates.value(time_start - coords.epoch) ÷ coords.step_ms
+    hend = Dates.value(time_end - coords.epoch) ÷ coords.step_ms
     ti = searchsortedfirst(coords.hours, hstart):searchsortedlast(coords.hours, hend)
 
-    # Longitude is stored 0..360; latitude is stored descending 90..-90.
-    lon360(x) = mod(x, 360)
-    xi = findfirst(>=(lon360(area.X[1])), coords.lon):findlast(<=(lon360(area.X[2])), coords.lon)
-    yi = findfirst(<=(area.Y[2]), coords.lat):findlast(>=(area.Y[1]), coords.lat)
-    xs, ys = coords.lon[xi], coords.lat[yi]
+    load_area, _ = _native_lon_crop(longitude_convention(source), area)
+    lon_idxs = findall(x -> load_area.X[1] <= x <= load_area.X[2], coords.lon)
+    lat_idxs = findall(y -> area.Y[1] <= y <= area.Y[2], coords.lat)
+    xi, yi = first(lon_idxs):last(lon_idxs), first(lat_idxs):last(lat_idxs)
+    return (; xi, yi, ti, xs = coords.lon[xi], ys = coords.lat[yi])
+end
+
+function _load_contiguous_series(source, fields::Tuple, area::Extent, time_start::DateTime, time_end::DateTime)
+    cloud_source = getraster(source)
+    coords = _contiguous_series_coords(cloud_source)
+    (; xi, yi, ti, xs, ys) = _contiguous_series_indices(source, coords, area, time_start, time_end)
 
     layers = map(fields) do name
         @info "  loading $source $name..."
         long_name = layername(source, name)
-        raw = _contiguous_series_open(cloud_source.url, long_name)
+        raw = _contiguous_series_open(cloud_source, long_name)
         data = raw[xi, yi, ti]
         Raster(data, (X(xs), Y(ys), Ti(1:length(ti))); crs = EPSG(4326), name)
     end
@@ -430,6 +444,34 @@ function _load_layers(::ContiguousTimeSeries, source, fields::Tuple, area::Exten
     _load_contiguous_series(source, fields, area, time_start, time_end)
 end
 
+# A source whose fields span several separate base stores (e.g. ERA5ECMWFLand's
+# per-topic-group Zarr stores) rather than one shared store. `native_group`
+# resolves each field to its group; one `getraster` call per distinct group.
+struct MultiGroupContiguousTimeSeries <: Loader end
+function native_group end
+
+function _load_multi_group_series(source, fields::Tuple, area::Extent, time_start::DateTime, time_end::DateTime)
+    groups = unique(map(f -> native_group(source, f), fields))
+    group_sources = Dict(g => getraster(source, g) for g in groups)
+    layers = map(fields) do name
+        @info "  loading $source $name..."
+        cloud_source = group_sources[native_group(source, name)]
+        coords = _contiguous_series_coords(cloud_source)
+        (; xi, yi, ti, xs, ys) = _contiguous_series_indices(source, coords, area, time_start, time_end)
+        long_name = layername(source, name)
+        raw = _contiguous_series_open(cloud_source, long_name)
+        data = raw[xi, yi, ti]
+        Raster(data, (X(xs), Y(ys), Ti(1:length(ti))); crs = EPSG(4326), name)
+    end
+    return NamedTuple{fields}(layers)
+end
+
+function _load_layers(::MultiGroupContiguousTimeSeries, source, fields::Tuple, area::Extent, years)
+    time_start = DateTime(first(years), 1, 1, 0)
+    time_end = DateTime(last(years), 12, 31, 23)
+    _load_multi_group_series(source, fields, area, time_start, time_end)
+end
+
 """
     prefetch_weather!(source, points, dates; fields = layers(source), batch = Week(1))
 
@@ -439,7 +481,8 @@ Download and cache `source` weather data for `points`' bounding area and
 cached, so a re-run resumes where it left off.
 """
 function prefetch_weather!(source::Type, points, dates; fields = layers(source), batch = Week(1))
-    area = Extents.buffer(_points_extent(points), (X = _POINTS_LOAD_BUFFER, Y = _POINTS_LOAD_BUFFER))
+    buffer = points_load_buffer(source)
+    area = Extents.buffer(_points_extent(points), (X = buffer, Y = buffer))
     date_start, date_end = extrema(dates)
     cache_dir = joinpath(RasterDataSources.rasterpath(source), "prefetch")
     mkpath(cache_dir)
@@ -471,7 +514,7 @@ function _load_field_at_points(source, name, points_dim; kw...)
 end
 
 function _load_layers_at_points(loader::Loader, source, fields::Tuple, points_dim, years)
-    area_layers = _load_layers(loader, source, fields, _points_bbox(points_dim), years)
+    area_layers = _load_layers(loader, source, fields, _points_bbox(source, points_dim), years)
     return NamedTuple{fields}(map(l -> _to_points(l, points_dim), values(area_layers)))
 end
 
@@ -677,18 +720,18 @@ function _load_canonical_points(source, names::Tuple, points_dim, years)
     static_stack = if isempty(static_fields)
         NamedTuple()
     else
-        area = _points_bbox(points_dim)
+        area = _points_bbox(source, points_dim)
         native = _load_static(source, static_fields, area)
         NamedTuple{static_fields}(map(l -> _to_points(l, points_dim), values(native)))
     end
     return _canonical_keyed(vars, merge(ti_stack, static_stack))
 end
 
-function _points_bbox(points_dim)
+function _points_bbox(source, points_dim)
     coords = lookup(points_dim)
     lons = first.(coords); lats = last.(coords)
-    return Extents.buffer(Extent(X = extrema(lons), Y = extrema(lats)),
-        (X = _POINTS_LOAD_BUFFER, Y = _POINTS_LOAD_BUFFER))
+    buffer = points_load_buffer(source)
+    return Extents.buffer(Extent(X = extrema(lons), Y = extrema(lats)), (X = buffer, Y = buffer))
 end
 
 # Compile-time partition of a variables tuple into (Ti-varying, static)
@@ -762,8 +805,8 @@ end
 # Cheap single-snapshot (X, Y) grid near `start_date`, for seeding initial
 # conditions from a source that isn't the run's `weather_source` (e.g. ERA5
 # seeding an NCEP/AWAP/SILO run). Not a time-varying forcing: a
-# ContiguousTimeSeries source is read for a single hour (see
-# _load_contiguous_series); other loaders read a single year.
+# ContiguousTimeSeries/MultiGroupContiguousTimeSeries sources are read for a
+# single hour; other loaders read a single year.
 function _load_init_snapshot(source, sample::Sample, area::Extent, start_date::Date)
     name = canonical_name(sample)
     var = _variable_for(init_variables(source), name)
@@ -771,6 +814,9 @@ function _load_init_snapshot(source, sample::Sample, area::Extent, start_date::D
     raw2d = if loader(source) isa ContiguousTimeSeries
         t0 = DateTime(start_date)
         first(values(_load_contiguous_series(source, (field,), area, t0, t0 + Hour(1))))[Ti(1)]
+    elseif loader(source) isa MultiGroupContiguousTimeSeries
+        t0 = DateTime(start_date)
+        first(values(_load_multi_group_series(source, (field,), area, t0, t0 + Hour(1))))[Ti(1)]
     else
         yr = year(start_date)
         first(values(_load_layers(loader(source), source, (field,), area, yr:yr)))[Ti(1)]
@@ -1047,10 +1093,10 @@ end
 @inline _non_static_vars_step(acc::Tuple, v, ::EnvSlot, rest::Tuple) =
     _non_static_vars((acc..., v), rest)
 
-# Native quantities only — `EnvDaily` ones live in `buffers.<name>` and
-# come from `_SERIES_DAILY`, so they must not appear in `buffers.native`.
+# Native quantities only — `EnvDaily` ones live in `buffers.<name>`, not here.
+# `_full_variables`, not `variables`: buffers need a slot for fallback fields too.
 @inline _native_quantities(source::Type) = _merge_unique(
-    map(quantity, vars_for(variables(source), EnvHourly())),
+    map(quantity, vars_for(_full_variables(source), EnvHourly())),
     (WindSpeed(), ActualVapourPressure(), Pressure()),
 )
 

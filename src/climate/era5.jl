@@ -3,6 +3,7 @@
 weather_calendar(::Type{<:ERA5}) = Daily()
 native_timestep(::Type{<:ERA5}) = Hourly()
 loader(::Type{<:ERA5}) = ContiguousTimeSeries()
+longitude_convention(::Type{<:ERA5}) = Longitude360()
 
 function variables(::Type{<:ERA5})
     (
